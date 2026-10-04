@@ -61,13 +61,24 @@ Log "[4/9] Configuring kiosk account '$HumanUser'..."
 $PlainPass = Read-Host "Set/refresh the SECRET admin password for $HumanUser"
 if (-not $PlainPass) { throw "Password cannot be empty." }
 $Sec = ConvertTo-SecureString $PlainPass -AsPlainText -Force
+
 if (-not (Get-LocalUser -Name $HumanUser -ErrorAction SilentlyContinue)) {
     New-LocalUser -Name $HumanUser -FullName "AVA Kiosk" -Password $Sec -PasswordNeverExpires | Out-Null
+    Log "Created new user: $HumanUser"
 } else {
     Set-LocalUser -Name $HumanUser -Password $Sec -PasswordNeverExpires $true
+    Log "Updated password for existing user: $HumanUser"
 }
-$admins = (Get-LocalGroupMember -Group "Administrators" -ErrorAction SilentlyContinue).Name
-if ($admins -notlike "*\$HumanUser") { Add-LocalGroupMember -Group "Administrators" -Member $HumanUser }
+
+# Safely check if already an Administrator (avoids PowerShell array filtering bugs)
+$isAdmin = Get-LocalGroupMember -Group "Administrators" -Member $HumanUser -ErrorAction SilentlyContinue
+if (-not $isAdmin) {
+    Add-LocalGroupMember -Group "Administrators" -Member $HumanUser
+    Log "Added $HumanUser to Administrators group."
+} else {
+    Log "$HumanUser is already an Administrator."
+}
+
 $Winlogon = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon"
 Set-ItemProperty $Winlogon "AutoAdminLogon"    "1"               -Type String
 Set-ItemProperty $Winlogon "DefaultUserName"   $HumanUser        -Type String
