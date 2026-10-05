@@ -1,6 +1,6 @@
 #Requires -RunAsAdministrator
 <#
-    Illumina AVA PC Installer - Windows 10/11 (v3 - HTTPS/443)
+    Illumina AVA PC Installer - Windows 10/11 (v4 - Final Polish)
     Public host : nickng70/Illumina-Installer
     Private src : nickng70/Illumina-Releases
 #>
@@ -22,7 +22,7 @@ $AutoOpenPortalAtLogon = $true
 function Log($m) { Write-Host "`n==> $m" -ForegroundColor Green }
 
 Write-Host "==================================================" -ForegroundColor Cyan
-Write-Host "   Illumina AVA PC Installer (Windows) v3         " -ForegroundColor Cyan
+Write-Host "   Illumina AVA PC Installer (Windows) v4         " -ForegroundColor Cyan
 Write-Host "==================================================" -ForegroundColor Cyan
 
 # ---------------- [1/9] GitHub token ----------------------------------------
@@ -98,8 +98,42 @@ if ($Backup) {
     Move-Item $Backup "$InstallDir\Data" -Force
 }
 New-Item -ItemType Directory -Path "$InstallDir\Data" -Force | Out-Null
+# Lockdown Data to System and Administrators (avauser is an Admin, so it gets access to draw the screens)
 icacls "$InstallDir\Data" /inheritance:r /grant:r "SYSTEM:(OI)(CI)F" "Administrators:(OI)(CI)F" | Out-Null
 Set-Content "C:\ProgramData\Illumina\current-version" $Release.tag_name
+
+# ---------------- [5.5/9] Machine-level HTTPS certificate ------------------
+Log "[5.5/9] Ensuring machine-level HTTPS certificate..."
+$CertDir = "C:\ProgramData\Illumina"
+$PfxPath = "$CertDir\illumina.pfx"
+$PfxPass = "IlluminaKioskCert"   # fixed & non-secret: the PFX file itself is ACL-protected
+
+$cert = Get-ChildItem Cert:\LocalMachine\My -ErrorAction SilentlyContinue |
+        Where-Object { $_.FriendlyName -eq "Illumina Kiosk HTTPS" -and $_.NotAfter -gt (Get-Date).AddMonths(1) } |
+        Select-Object -First 1
+if (-not $cert) {
+    $cert = New-SelfSignedCertificate -DnsName "localhost" -CertStoreLocation "Cert:\LocalMachine\My" `
+            -FriendlyName "Illumina Kiosk HTTPS" -NotAfter (Get-Date).AddYears(100)
+    # Trust it machine-wide so Chrome/Edge show NO privacy warning, ever
+    Export-Certificate -Cert $cert -FilePath "$CertDir\illumina.cer" -Force | Out-Null
+    Import-Certificate -FilePath "$CertDir\illumina.cer" -CertStoreLocation Cert:\LocalMachine\Root | Out-Null
+}
+$sec = ConvertTo-SecureString -String $PfxPass -Force -AsPlainText
+Export-PfxCertificate -Cert $cert -FilePath $PfxPath -Password $sec -Force | Out-Null
+icacls $PfxPath /inheritance:r /grant:r "SYSTEM:F" "Administrators:F" | Out-Null
+
+# Point Kestrel at it and bind to port 443 through the app's override file
+$overridesPath = "$InstallDir\AppData\AppSettingsOverrides.json"
+New-Item -ItemType Directory -Path "$InstallDir\AppData" -Force | Out-Null
+if (Test-Path $overridesPath) { $obj = Get-Content $overridesPath -Raw | ConvertFrom-Json }
+else { $obj = [PSCustomObject]@{} }
+
+$obj | Add-Member -NotePropertyName "Kestrel" -Force -NotePropertyValue ([PSCustomObject]@{
+    Certificates = [PSCustomObject]@{ Default = [PSCustomObject]@{ Path = $PfxPath; Password = $PfxPass } }
+})
+$obj | Add-Member -NotePropertyName "Urls" -Force -NotePropertyValue "https://0.0.0.0:$HttpPort"
+
+$obj | ConvertTo-Json -Depth 10 | Set-Content $overridesPath
 
 # ---------------- Chrome resolution -----------------------------------------
 function Resolve-Chrome {
@@ -113,15 +147,14 @@ function Resolve-Chrome {
 }
 $ChromeExe = Resolve-Chrome
 if (-not $ChromeExe) { Write-Warning "Chrome not found - portal links fall back to default browser." }
-# IMPORTANT: Since we are using HTTPS with a self-signed dev cert, we add --ignore-certificate-errors 
-# so Chrome doesn't block the kiosk windows with a privacy warning.
-$PortalLine = if ($ChromeExe) { "Start-Process '$ChromeExe' -ArgumentList '$PortalUrl', '--ignore-certificate-errors'" } else { "Start-Process '$PortalUrl'" }
+# Cert is fully trusted now, no need for --ignore-certificate-errors
+$PortalLine = if ($ChromeExe) { "Start-Process '$ChromeExe' -ArgumentList '$PortalUrl'" } else { "Start-Process '$PortalUrl'" }
 
-# ---------------- [6/9] Helper scripts (with HTTPS env var) -----------------
+# ---------------- [6/9] Helper scripts --------------------------------------
 Log "[6/9] Writing helper scripts..."
 $AppExe = "$InstallDir\Illumina.exe"
 
-# We inject ASPNETCORE_URLS here so the app binds to HTTPS on port 443 automatically
+# We inject ASPNETCORE_URLS here as a fallback safeguard
 $EnvUrls = "https://0.0.0.0:$HttpPort"
 
 $open = @'
