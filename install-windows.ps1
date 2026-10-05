@@ -56,34 +56,43 @@ Start-Sleep -Seconds 2
 Get-ChildItem "C:\Users\*\AppData\Local\Temp\IlluminaKiosk" -Directory -ErrorAction SilentlyContinue |
     Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
 
-# ---------------- [4/9] avauser + auto sign-in ------------------------------
-Log "[4/9] Configuring kiosk account '$HumanUser'..."
-$PlainPass = Read-Host "Set/refresh the SECRET admin password for $HumanUser"
-if (-not $PlainPass) { throw "Password cannot be empty." }
-$Sec = ConvertTo-SecureString $PlainPass -AsPlainText -Force
+# ---------------- [4/9] User Account Selection ------------------------------
+Log "[4/9] Selecting installation mode..."
+$mode = Read-Host "Install for dedicated 'avauser' (Church AVA) or 'current' user (Local testing)? [avauser/current]"
 
-if (-not (Get-LocalUser -Name $HumanUser -ErrorAction SilentlyContinue)) {
-    New-LocalUser -Name $HumanUser -FullName "AVA Kiosk" -Password $Sec -PasswordNeverExpires | Out-Null
-    Log "Created new user: $HumanUser"
+if ($mode -eq 'current') {
+    $HumanUser = $env:USERNAME
+    Log "Installing for current user: $HumanUser. (Skipping auto-login to protect your daily account)."
 } else {
-    Set-LocalUser -Name $HumanUser -Password $Sec -PasswordNeverExpires $true
-    Log "Updated password for existing user: $HumanUser"
-}
+    $HumanUser = "avauser"
+    $PlainPass = Read-Host "Set/refresh the SECRET admin password for $HumanUser"
+    if (-not $PlainPass) { throw "Password cannot be empty." }
+    $Sec = ConvertTo-SecureString $PlainPass -AsPlainText -Force
 
-# Safely check if already an Administrator (avoids PowerShell array filtering bugs)
-$isAdmin = Get-LocalGroupMember -Group "Administrators" -Member $HumanUser -ErrorAction SilentlyContinue
-if (-not $isAdmin) {
-    Add-LocalGroupMember -Group "Administrators" -Member $HumanUser
-    Log "Added $HumanUser to Administrators group."
-} else {
-    Log "$HumanUser is already an Administrator."
-}
+    if (-not (Get-LocalUser -Name $HumanUser -ErrorAction SilentlyContinue)) {
+        New-LocalUser -Name $HumanUser -FullName "AVA Kiosk" -Password $Sec -PasswordNeverExpires | Out-Null
+        Log "Created new user: $HumanUser"
+    } else {
+        Set-LocalUser -Name $HumanUser -Password $Sec -PasswordNeverExpires $true
+        Log "Updated password for existing user: $HumanUser"
+    }
 
-$Winlogon = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon"
-Set-ItemProperty $Winlogon "AutoAdminLogon"    "1"               -Type String
-Set-ItemProperty $Winlogon "DefaultUserName"   $HumanUser        -Type String
-Set-ItemProperty $Winlogon "DefaultPassword"   $PlainPass        -Type String
-Set-ItemProperty $Winlogon "DefaultDomainName" $env:COMPUTERNAME -Type String
+    $isAdmin = Get-LocalGroupMember -Group "Administrators" -Member $HumanUser -ErrorAction SilentlyContinue
+    if (-not $isAdmin) {
+        Add-LocalGroupMember -Group "Administrators" -Member $HumanUser
+        Log "Added $HumanUser to Administrators group."
+    } else {
+        Log "$HumanUser is already an Administrator."
+    }
+
+    # ONLY set auto-login if we are using avauser!
+    $Winlogon = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon"
+    Set-ItemProperty $Winlogon "AutoAdminLogon"    "1"               -Type String
+    Set-ItemProperty $Winlogon "DefaultUserName"   $HumanUser        -Type String
+    Set-ItemProperty $Winlogon "DefaultPassword"   $PlainPass        -Type String
+    Set-ItemProperty $Winlogon "DefaultDomainName" $env:COMPUTERNAME -Type String
+    Log "Configured Windows to auto-login as $HumanUser."
+}
 
 # ---------------- [5/9] App files (preserve Data) ---------------------------
 Log "[5/9] Installing app to $InstallDir..."
