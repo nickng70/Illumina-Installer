@@ -1,8 +1,9 @@
 #Requires -RunAsAdministrator
 <#
-    Illumina AVA PC Installer - Windows 10/11 (v4 - Final Polish)
-    Public host : nickng70/Illumina-Installer
-    Private src : nickng70/Illumina-Releases
+    Illumina AVA PC Installer - Windows 10/11 (v6 - Option A final)
+    Kiosk account = dedicated standard user (avauser) or current user (testing).
+    Binaries in Program Files; writable folders ACL-granted; Data locked to
+    runtime account + Administrators only.
 #>
 $ErrorActionPreference = "Stop"
 
@@ -11,7 +12,6 @@ $GitHubOwner = "nickng70"
 $GitHubRepo  = "Illumina-Releases"
 $AssetName   = "illumina-win-x64.zip"
 $InstallDir  = "C:\Program Files\Illumina"
-$HumanUser   = "avauser"
 $HttpPort    = "443"
 $PortalUrl   = "https://localhost"
 $TokenFile   = "C:\ProgramData\Illumina\github-token"
@@ -22,11 +22,11 @@ $AutoOpenPortalAtLogon = $true
 function Log($m) { Write-Host "`n==> $m" -ForegroundColor Green }
 
 Write-Host "==================================================" -ForegroundColor Cyan
-Write-Host "   Illumina AVA PC Installer (Windows) v4         " -ForegroundColor Cyan
+Write-Host "   Illumina AVA PC Installer (Windows) v6         " -ForegroundColor Cyan
 Write-Host "==================================================" -ForegroundColor Cyan
 
-# ---------------- [1/9] GitHub token ----------------------------------------
-Log "[1/9] GitHub token..."
+# ---------------- [1/8] GitHub token ----------------------------------------
+Log "[1/8] GitHub token..."
 New-Item -ItemType Directory -Path "C:\ProgramData\Illumina" -Force | Out-Null
 if ($env:GITHUB_TOKEN) { $Token = $env:GITHUB_TOKEN }
 elseif (Test-Path $TokenFile) { $Token = (Get-Content $TokenFile -Raw).Trim(); Log "Reusing stored token." }
@@ -38,8 +38,8 @@ else {
 }
 $Api = @{ Authorization = "Bearer $Token"; Accept = "application/vnd.github+json" }
 
-# ---------------- [2/9] Latest release asset --------------------------------
-Log "[2/9] Locating latest release..."
+# ---------------- [2/8] Latest release asset --------------------------------
+Log "[2/8] Locating latest release..."
 try { $Release = Invoke-RestMethod -Uri "https://api.github.com/repos/$GitHubOwner/$GitHubRepo/releases/latest" -Headers $Api }
 catch { throw "GitHub API failed. $_" }
 $Asset = $Release.assets | Where-Object { $_.name -eq $AssetName } | Select-Object -First 1
@@ -48,54 +48,61 @@ $Zip = Join-Path $env:TEMP $AssetName
 Log "Downloading $AssetName..."
 Invoke-WebRequest -Uri $Asset.url -Headers @{ Authorization = "Bearer $Token"; Accept = "application/octet-stream" } -OutFile $Zip
 
-# ---------------- [3/9] Stop running instances ------------------------------
-Log "[3/9] Stopping running Illumina/Chrome..."
+# ---------------- [3/8] Stop running instances ------------------------------
+Log "[3/8] Stopping running Illumina/Chrome..."
 Get-Process -Name Illumina -ErrorAction SilentlyContinue | Stop-Process -Force
 Get-Process -Name chrome   -ErrorAction SilentlyContinue | Stop-Process -Force
 Start-Sleep -Seconds 2
 Get-ChildItem "C:\Users\*\AppData\Local\Temp\IlluminaKiosk" -Directory -ErrorAction SilentlyContinue |
     Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
 
-# ---------------- [4/9] User Account Selection ------------------------------
-Log "[4/9] Selecting installation mode..."
-$mode = Read-Host "Install for dedicated 'avauser' (Church AVA) or 'current' user (Local testing)? [avauser/current]"
+# ---------------- [4/8] Kiosk account selection -----------------------------
+Log "[4/8] Choosing the kiosk account..."
+$mode = Read-Host "Install for dedicated 'avauser' (church AVA PCs) or 'current' user (local testing)? [avauser/current]"
+$Winlogon = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon"
 
 if ($mode -eq 'current') {
     $HumanUser = $env:USERNAME
-    Log "Installing for current user: $HumanUser. (Skipping auto-login to protect your daily account)."
-} else {
+    Log "Kiosk account: current user ($HumanUser)."
+    $PlainPass = Read-Host "Windows password for $HumanUser (for auto-login; leave blank to skip auto-login)"
+    if ($PlainPass) {
+        Set-ItemProperty $Winlogon "AutoAdminLogon"    "1"               -Type String
+        Set-ItemProperty $Winlogon "DefaultUserName"   $HumanUser        -Type String
+        Set-ItemProperty $Winlogon "DefaultPassword"   $PlainPass        -Type String
+        Set-ItemProperty $Winlogon "DefaultDomainName" $env:COMPUTERNAME -Type String
+        Log "Configured auto sign-in for $HumanUser."
+    } else { Log "Skipped auto sign-in." }
+}
+else {
     $HumanUser = "avauser"
-    $PlainPass = Read-Host "Set/refresh the SECRET admin password for $HumanUser"
+    $PlainPass = Read-Host "Set/refresh the SECRET admin-gate password for $HumanUser"
     if (-not $PlainPass) { throw "Password cannot be empty." }
     $Sec = ConvertTo-SecureString $PlainPass -AsPlainText -Force
-
     if (-not (Get-LocalUser -Name $HumanUser -ErrorAction SilentlyContinue)) {
         New-LocalUser -Name $HumanUser -FullName "AVA Kiosk" -Password $Sec -PasswordNeverExpires | Out-Null
-        Log "Created new user: $HumanUser"
+        Log "Created kiosk user: $HumanUser"
     } else {
         Set-LocalUser -Name $HumanUser -Password $Sec -PasswordNeverExpires $true
-        Log "Updated password for existing user: $HumanUser"
+        Log "Updated password for existing kiosk user: $HumanUser"
     }
-
+    # Kiosk account is a STANDARD user by design: every privileged action
+    # (updates, ACL changes, installs) must demand the admin password.
     $isAdmin = Get-LocalGroupMember -Group "Administrators" -Member $HumanUser -ErrorAction SilentlyContinue
-    if (-not $isAdmin) {
-        Add-LocalGroupMember -Group "Administrators" -Member $HumanUser
-        Log "Added $HumanUser to Administrators group."
+    if ($isAdmin) {
+        Remove-LocalGroupMember -Group "Administrators" -Member $HumanUser
+        Log "Demoted $HumanUser to standard user (kiosk accounts must not be admins)."
     } else {
-        Log "$HumanUser is already an Administrator."
+        Log "$HumanUser is a standard user (correct for a kiosk)."
     }
-
-    # ONLY set auto-login if we are using avauser!
-    $Winlogon = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon"
     Set-ItemProperty $Winlogon "AutoAdminLogon"    "1"               -Type String
     Set-ItemProperty $Winlogon "DefaultUserName"   $HumanUser        -Type String
     Set-ItemProperty $Winlogon "DefaultPassword"   $PlainPass        -Type String
     Set-ItemProperty $Winlogon "DefaultDomainName" $env:COMPUTERNAME -Type String
-    Log "Configured Windows to auto-login as $HumanUser."
+    Log "Configured auto sign-in for $HumanUser."
 }
 
-# ---------------- [5/9] App files (preserve Data) ---------------------------
-Log "[5/9] Installing app to $InstallDir..."
+# ---------------- [5/8] App files + ACL lockdown ----------------------------
+Log "[5/8] Installing app to $InstallDir..."
 $Backup = $null
 if (Test-Path "$InstallDir\Data") { $Backup = Join-Path $env:TEMP "illumina-data-backup"; Move-Item "$InstallDir\Data" $Backup -Force }
 if (Test-Path $InstallDir) { Remove-Item $InstallDir -Recurse -Force }
@@ -107,23 +114,30 @@ if ($Backup) {
     Move-Item $Backup "$InstallDir\Data" -Force
 }
 New-Item -ItemType Directory -Path "$InstallDir\Data" -Force | Out-Null
-# Lockdown Data to System and Administrators (avauser is an Admin, so it gets access to draw the screens)
-icacls "$InstallDir\Data" /inheritance:r /grant:r "SYSTEM:(OI)(CI)F" "Administrators:(OI)(CI)F" | Out-Null
+
+# Writable working folders: the app (running as the kiosk account) must be
+# able to create/update these inside Program Files - this is the fix for the
+# SlideContent UnauthorizedAccessException.
+foreach ($w in @("SlideContent", "MediaContent", "AppData")) {
+    $p = Join-Path $InstallDir $w
+    New-Item -ItemType Directory -Path $p -Force | Out-Null
+    icacls $p /grant "${HumanUser}:(OI)(CI)M" | Out-Null
+}
+# Data lockdown: runtime account + admins only; every other account denied.
+icacls "$InstallDir\Data" /inheritance:r /grant:r "SYSTEM:(OI)(CI)F" "Administrators:(OI)(CI)F" "${HumanUser}:(OI)(CI)RX" | Out-Null
 Set-Content "C:\ProgramData\Illumina\current-version" $Release.tag_name
 
-# ---------------- [5.5/9] Machine-level HTTPS certificate ------------------
-Log "[5.5/9] Ensuring machine-level HTTPS certificate..."
+# ---------------- [6/8] Machine cert + Kestrel overrides --------------------
+Log "[6/8] Ensuring machine-level HTTPS certificate..."
 $CertDir = "C:\ProgramData\Illumina"
 $PfxPath = "$CertDir\illumina.pfx"
-$PfxPass = "IlluminaKioskCert"   # fixed & non-secret: the PFX file itself is ACL-protected
-
+$PfxPass = "IlluminaKioskCert"
 $cert = Get-ChildItem Cert:\LocalMachine\My -ErrorAction SilentlyContinue |
         Where-Object { $_.FriendlyName -eq "Illumina Kiosk HTTPS" -and $_.NotAfter -gt (Get-Date).AddMonths(1) } |
         Select-Object -First 1
 if (-not $cert) {
     $cert = New-SelfSignedCertificate -DnsName "localhost" -CertStoreLocation "Cert:\LocalMachine\My" `
             -FriendlyName "Illumina Kiosk HTTPS" -NotAfter (Get-Date).AddYears(100)
-    # Trust it machine-wide so Chrome/Edge show NO privacy warning, ever
     Export-Certificate -Cert $cert -FilePath "$CertDir\illumina.cer" -Force | Out-Null
     Import-Certificate -FilePath "$CertDir\illumina.cer" -CertStoreLocation Cert:\LocalMachine\Root | Out-Null
 }
@@ -131,39 +145,30 @@ $sec = ConvertTo-SecureString -String $PfxPass -Force -AsPlainText
 Export-PfxCertificate -Cert $cert -FilePath $PfxPath -Password $sec -Force | Out-Null
 icacls $PfxPath /inheritance:r /grant:r "SYSTEM:F" "Administrators:F" | Out-Null
 
-# Point Kestrel at it and bind to port 443 through the app's override file
 $overridesPath = "$InstallDir\AppData\AppSettingsOverrides.json"
-New-Item -ItemType Directory -Path "$InstallDir\AppData" -Force | Out-Null
 if (Test-Path $overridesPath) { $obj = Get-Content $overridesPath -Raw | ConvertFrom-Json }
 else { $obj = [PSCustomObject]@{} }
-
 $obj | Add-Member -NotePropertyName "Kestrel" -Force -NotePropertyValue ([PSCustomObject]@{
     Certificates = [PSCustomObject]@{ Default = [PSCustomObject]@{ Path = $PfxPath; Password = $PfxPass } }
 })
 $obj | Add-Member -NotePropertyName "Urls" -Force -NotePropertyValue "https://0.0.0.0:$HttpPort"
-
 $obj | ConvertTo-Json -Depth 10 | Set-Content $overridesPath
 
-# ---------------- Chrome resolution -----------------------------------------
+# ---------------- Chrome + helper scripts + shortcuts -----------------------
 function Resolve-Chrome {
-    foreach ($c in @(
-        "C:\Program Files\Google\Chrome\Application\chrome.exe",
-        "C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
-        "$env:LOCALAPPDATA\Google\Chrome\Application\chrome.exe")) { if (Test-Path $c) { return $c } }
+    foreach ($c in @("C:\Program Files\Google\Chrome\Application\chrome.exe",
+                     "C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+                     "$env:LOCALAPPDATA\Google\Chrome\Application\chrome.exe")) { if (Test-Path $c) { return $c } }
     $ap = Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe" -ErrorAction SilentlyContinue
     if ($ap -and $ap.'(default)' -and (Test-Path $ap.'(default)')) { return $ap.'(default)' }
     return $null
 }
 $ChromeExe = Resolve-Chrome
 if (-not $ChromeExe) { Write-Warning "Chrome not found - portal links fall back to default browser." }
-# Cert is fully trusted now, no need for --ignore-certificate-errors
 $PortalLine = if ($ChromeExe) { "Start-Process '$ChromeExe' -ArgumentList '$PortalUrl'" } else { "Start-Process '$PortalUrl'" }
 
-# ---------------- [6/9] Helper scripts --------------------------------------
-Log "[6/9] Writing helper scripts..."
-$AppExe = "$InstallDir\Illumina.exe"
-
-# We inject ASPNETCORE_URLS here as a fallback safeguard
+Log "[7/8] Writing helper scripts and shortcuts..."
+$AppExe  = "$InstallDir\Illumina.exe"
 $EnvUrls = "https://0.0.0.0:$HttpPort"
 
 $open = @'
@@ -194,13 +199,11 @@ __PORTAL__
 $restart = $restart -replace '__APP__', $AppExe -replace '__PORTAL__', $PortalLine -replace '__ENV_URLS__', $EnvUrls
 Set-Content "$InstallDir\restart-illumina.ps1" $restart
 
-# ---------------- [7/9] Shortcuts -------------------------------------------
-Log "[7/9] Creating desktop icons and logon autostart..."
 $Wsh     = New-Object -ComObject WScript.Shell
 $Startup = [Environment]::GetFolderPath("CommonStartup")
 $Desktop = [Environment]::GetFolderPath("CommonDesktopDirectory")
-Get-ChildItem $Startup -Filter "Illumina*.lnk"        -ErrorAction SilentlyContinue | Remove-Item -Force
-Get-ChildItem $Desktop -Filter "Illumina*.lnk"        -ErrorAction SilentlyContinue | Remove-Item -Force
+Get-ChildItem $Startup -Filter "Illumina*.lnk"         -ErrorAction SilentlyContinue | Remove-Item -Force
+Get-ChildItem $Desktop -Filter "Illumina*.lnk"         -ErrorAction SilentlyContinue | Remove-Item -Force
 Get-ChildItem $Desktop -Filter "Restart Illumina*.lnk" -ErrorAction SilentlyContinue | Remove-Item -Force
 $PsExe = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
 
@@ -221,22 +224,18 @@ $a.TargetPath = $PsExe
 $a.Arguments  = "-ExecutionPolicy Bypass -WindowStyle Hidden -File `"$InstallDir\open-illumina.ps1`" -DelaySeconds $LogonDelaySeconds" + $(if ($AutoOpenPortalAtLogon) { "" } else { " -NoPortal" })
 $a.Save()
 
-# ---------------- [8/9] Firewall + power ------------------------------------
-Log "[8/9] Firewall and power..."
+# ---------------- [8/8] Firewall + power + summary --------------------------
+Log "[8/8] Firewall and power..."
 Remove-NetFirewallRule -DisplayName "Illumina Web App" -ErrorAction SilentlyContinue
 New-NetFirewallRule -DisplayName "Illumina Web App" -Direction Inbound -LocalPort $HttpPort -Protocol TCP -Action Allow | Out-Null
 powercfg /change standby-timeout-ac 0 | Out-Null
 powercfg /change monitor-timeout-ac 0 | Out-Null
 
-# ---------------- [9/9] Summary ---------------------------------------------
-Log "[9/9] Done!"
 Write-Host @"
-
 ==================================================
    Installation complete! ($($Release.tag_name))
-   Portal    : $PortalUrl
-   Everyday  : desktop icon 'Illumina'
-   Emergency : desktop icon 'Restart Illumina (if misbehaving)'
+   Kiosk account : $HumanUser
+   Portal        : $PortalUrl
 ==================================================
 "@ -ForegroundColor Cyan
 $ans = Read-Host "Reboot now to apply auto sign-in? [Y/n]"
