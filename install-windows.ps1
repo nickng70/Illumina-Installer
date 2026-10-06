@@ -1,12 +1,17 @@
 #Requires -RunAsAdministrator
 <#
-    Illumina AVA PC Installer - Windows 10/11 (v6.7 FINAL)
+    Illumina AVA PC Installer - Windows 10/11 (v6.8 FINAL)
     - Numbered kiosk-account menu (ENTER = 1 = avauser, standard user);
-      "current" mode shows your real username and skips portal auto-open
+      "current" mode NEVER modifies the account and always leaves auto
+      sign-in in a KNOWN state (enable with confirmed password, or ENTER
+      to disable and clear any stale configuration)
+    - Any newly stored password is confirmed twice (Sunday-morning proof)
     - Professional site survey with explicit ENTER defaults (ENTER = No):
       Right Wall / Streaming-Broadcast / Google Drive sync, stamped
       per-machine into AppData/AppSettingsOverrides.json (merged
       key-by-key, never clobbering Settings-saved geometry)
+    - Portal opens with --new-window so it can never be swallowed as a
+      tab by an already-running personal Chrome (the unresizable-portal bug)
     - Deliberately minimal helpers: start the exe if needed, wait, open
       Chrome - no probes, no env vars (AppSettingsOverrides owns Urls)
     - Per-user desktop shortcuts + logon autostart (kiosk account only)
@@ -34,7 +39,7 @@ $AutoOpenPortalAtLogon = $true
 function Log($m) { Write-Host "`n==> $m" -ForegroundColor Green }
 
 Write-Host "==================================================" -ForegroundColor Cyan
-Write-Host "   Illumina AVA PC Installer (Windows) v6.7       " -ForegroundColor Cyan
+Write-Host "   Illumina AVA PC Installer (Windows) v6.8       " -ForegroundColor Cyan
 Write-Host "==================================================" -ForegroundColor Cyan
 
 # ---------------- [1/8] GitHub token ----------------------------------------
@@ -74,30 +79,61 @@ Write-Host ""
 Write-Host "  [1] avauser       - dedicated kiosk account (recommended for church AVA PCs)"
 Write-Host "  [2] $env:USERNAME - your current Windows account (local testing)"
 $mode = Read-Host "Select kiosk account - press ENTER for option 1"
-$Winlogon = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon"
+$Winlogon    = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon"
+$wl          = Get-ItemProperty $Winlogon -ErrorAction SilentlyContinue
+$autoOnNow   = ($wl.AutoAdminLogon -eq "1")
+$autoUserNow = $wl.DefaultUserName
+
+# Any time we STORE a new password (registry auto-login and/or the kiosk
+# account itself), confirm it twice: a silent typo here means a kiosk PC
+# that auto-logs into a logon screen, or an account whose password nobody
+# knows - both are Sunday-morning emergencies.
+function Read-NewPassword([string]$what) {
+    $p1 = Read-Host $what
+    if (-not $p1) { return $null }
+    $p2 = Read-Host "Type it once more to confirm"
+    if ($p1 -ne $p2) { throw "Passwords did not match - nothing was changed. Re-run the installer." }
+    return $p1
+}
 
 if ($mode -eq '2') {
+    # CURRENT-USER MODE: the account is NEVER modified (no password change,
+    # no group changes). The only machine-level switch is auto sign-in, and
+    # we always leave it in a KNOWN state so a stale configuration from a
+    # previous avauser install can't yank the next boot into another session.
     $HumanUser = $env:USERNAME
-    Log "Kiosk account: $HumanUser (current user)."
-    $PlainPass = Read-Host "Windows password for $HumanUser, for auto sign-in (press ENTER to skip auto sign-in)"
-    if ($PlainPass) {
+    Log "Kiosk account: $HumanUser (current user). The account itself is never modified in this mode."
+    if ($autoOnNow) { Log "Auto sign-in is currently ENABLED for '$autoUserNow'." }
+    else { Log "Auto sign-in is currently disabled." }
+    $want = Read-Host "Enable auto sign-in for $HumanUser on this PC? [y/N] (ENTER = No, and any existing auto sign-in is turned off)"
+    if ($want -match '^[yY]') {
+        $PlainPass = Read-NewPassword "Windows password for $HumanUser, stored for auto sign-in (must be exact)"
         Set-ItemProperty $Winlogon "AutoAdminLogon"    "1"               -Type String
         Set-ItemProperty $Winlogon "DefaultUserName"   $HumanUser        -Type String
         Set-ItemProperty $Winlogon "DefaultPassword"   $PlainPass        -Type String
         Set-ItemProperty $Winlogon "DefaultDomainName" $env:COMPUTERNAME -Type String
-        Log "Configured auto sign-in for $HumanUser."
-    } else { Log "Skipped auto sign-in." }
+        Log "Auto sign-in ENABLED for $HumanUser."
+    } else {
+        Set-ItemProperty $Winlogon "AutoAdminLogon"  "0" -Type String
+        Set-ItemProperty $Winlogon "DefaultPassword" ""  -Type String
+        Log "Auto sign-in DISABLED (any previous configuration cleared)."
+    }
 }
 else {
     $HumanUser = "avauser"
     $existing  = Get-LocalUser -Name $HumanUser -ErrorAction SilentlyContinue
-    $PlainPass = Read-Host "SECRET admin-gate password for $HumanUser (press ENTER to keep the existing password)"
-    if (-not $PlainPass) {
-        # Re-run convenience: reuse the password auto-login already stores,
-        # so updates are a pure ENTER-ENTER-ENTER affair.
-        $PlainPass = (Get-ItemProperty $Winlogon -ErrorAction SilentlyContinue).DefaultPassword
-        if (-not $PlainPass) { throw "No stored password found - please type one." }
-        Log "Keeping existing password for $HumanUser."
+    # Reuse the stored auto-login password ONLY when it actually belongs to
+    # avauser - reusing a DefaultPassword left behind by a current-user
+    # install would silently set avauser's password to someone else's.
+    $reusable = $autoOnNow -and ($autoUserNow -eq $HumanUser) -and $wl.DefaultPassword
+    if ($reusable) {
+        $PlainPass = $wl.DefaultPassword
+        Log "Reusing the stored auto sign-in password for $HumanUser."
+    } else {
+        $PlainPass = Read-NewPassword "SECRET admin-gate password for $HumanUser (this also becomes its Windows password)"
+        if (-not $PlainPass) {
+            throw "No stored password to reuse and none typed - cannot configure $HumanUser. Re-run and type a password."
+        }
     }
     $Sec = ConvertTo-SecureString $PlainPass -AsPlainText -Force
     if (-not $existing) {
@@ -261,7 +297,10 @@ function Resolve-Chrome {
 }
 $ChromeExe = Resolve-Chrome
 if (-not $ChromeExe) { Write-Warning "Chrome not found - portal links fall back to default browser." }
-$PortalLine = if ($ChromeExe) { "Start-Process '$ChromeExe' -ArgumentList '$PortalUrl'" } else { "Start-Process '$PortalUrl'" }
+# --new-window: without it, a personal Chrome that is already running
+# swallows the portal as a TAB in an existing window (title != "Illumina"),
+# which made PositionOperatorPortal unable to find and resize it.
+$PortalLine = if ($ChromeExe) { "Start-Process '$ChromeExe' -ArgumentList '--new-window', '$PortalUrl'" } else { "Start-Process '$PortalUrl'" }
 
 Log "[7/8] Writing helper scripts and shortcuts..."
 $AppExe = "$InstallDir\Illumina.exe"
