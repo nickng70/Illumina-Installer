@@ -1,13 +1,15 @@
 #Requires -RunAsAdministrator
 <#
-    Illumina AVA PC Installer - Windows 10/11 (v6.2 FINAL)
-    - Kiosk account: dedicated standard user (avauser) or current user (testing)
-    - Binaries in Program Files (tamper-protected); runtime-writable folders
-      ACL-granted to the kiosk account; Data locked to runtime account + admins
-    - Machine-trusted 100-year HTTPS cert; Kestrel bound via AppSettingsOverrides
-    - Google Drive key auto-fetched from secrets/drive-key.json in the private
-      Illumina-Releases repo (or copied from a local path) - never shipped in
-      the release zip, never a manual pre-step
+    Illumina AVA PC Installer - Windows 10/11 (v6.3 FINAL)
+    - Numbered kiosk-account menu (ENTER = recommended avauser, standard user)
+    - Site survey: Right Wall / Streaming-Broadcast / Google Drive sync,
+      stamped per-machine into AppData/AppSettingsOverrides.json (merged,
+      never clobbering Settings-saved geometry)
+    - Binaries in Program Files; runtime-writable folders ACL-granted;
+      Data locked to runtime account + Administrators
+    - Machine-trusted 100-year HTTPS cert; Kestrel bound via overrides
+    - Drive key auto-fetched from secrets/drive-key.json (private repo)
+      or copied from a local path - never shipped, never a manual pre-step
 #>
 $ErrorActionPreference = "Stop"
 
@@ -16,7 +18,7 @@ $GitHubOwner = "nickng70"
 $GitHubRepo  = "Illumina-Releases"
 $AssetName   = "illumina-win-x64.zip"
 $InstallDir  = "C:\Program Files\Illumina"
-$MachineDir  = "C:\ProgramData\Illumina"   # update-surviving machine store
+$MachineDir  = "C:\ProgramData\Illumina"
 $HttpPort    = "443"
 $PortalUrl   = "https://localhost"
 $TokenFile   = "$MachineDir\github-token"
@@ -27,7 +29,7 @@ $AutoOpenPortalAtLogon = $true
 function Log($m) { Write-Host "`n==> $m" -ForegroundColor Green }
 
 Write-Host "==================================================" -ForegroundColor Cyan
-Write-Host "   Illumina AVA PC Installer (Windows) v6.2       " -ForegroundColor Cyan
+Write-Host "   Illumina AVA PC Installer (Windows) v6.3       " -ForegroundColor Cyan
 Write-Host "==================================================" -ForegroundColor Cyan
 
 # ---------------- [1/8] GitHub token ----------------------------------------
@@ -63,13 +65,16 @@ Get-ChildItem "C:\Users\*\AppData\Local\Temp\IlluminaKiosk" -Directory -ErrorAct
 
 # ---------------- [4/8] Kiosk account selection -----------------------------
 Log "[4/8] Choosing the kiosk account..."
-$mode = Read-Host "Install for dedicated 'avauser' (church AVA PCs) or 'current' user (local testing)? [avauser/current]"
+Write-Host ""
+Write-Host "  [1] avauser       - dedicated kiosk account (recommended for church AVA PCs)"
+Write-Host "  [2] $env:USERNAME - your current Windows account (local testing)"
+$mode = Read-Host "Choose kiosk account (press ENTER for 1)"
 $Winlogon = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon"
 
-if ($mode -eq 'current') {
+if ($mode -eq '2') {
     $HumanUser = $env:USERNAME
-    Log "Kiosk account: current user ($HumanUser)."
-    $PlainPass = Read-Host "Windows password for $HumanUser (for auto-login; leave blank to skip auto-login)"
+    Log "Kiosk account: $HumanUser (current user)."
+    $PlainPass = Read-Host "Windows password for $HumanUser (for auto-login; ENTER to skip auto-login)"
     if ($PlainPass) {
         Set-ItemProperty $Winlogon "AutoAdminLogon"    "1"               -Type String
         Set-ItemProperty $Winlogon "DefaultUserName"   $HumanUser        -Type String
@@ -80,25 +85,26 @@ if ($mode -eq 'current') {
 }
 else {
     $HumanUser = "avauser"
-    $PlainPass = Read-Host "Set/refresh the SECRET admin-gate password for $HumanUser"
-    if (-not $PlainPass) { throw "Password cannot be empty." }
+    $existing  = Get-LocalUser -Name $HumanUser -ErrorAction SilentlyContinue
+    $PlainPass = Read-Host "SECRET admin-gate password for $HumanUser (ENTER keeps existing)"
+    if (-not $PlainPass) {
+        $PlainPass = (Get-ItemProperty $Winlogon -ErrorAction SilentlyContinue).DefaultPassword
+        if (-not $PlainPass) { throw "No stored password found - please type one." }
+        Log "Keeping existing password for $HumanUser."
+    }
     $Sec = ConvertTo-SecureString $PlainPass -AsPlainText -Force
-    if (-not (Get-LocalUser -Name $HumanUser -ErrorAction SilentlyContinue)) {
+    if (-not $existing) {
         New-LocalUser -Name $HumanUser -FullName "AVA Kiosk" -Password $Sec -PasswordNeverExpires | Out-Null
-        Log "Created kiosk user: $HumanUser"
+        Log "Created kiosk user: $HumanUser (sign-in tile shows 'AVA Kiosk')."
     } else {
         Set-LocalUser -Name $HumanUser -Password $Sec -PasswordNeverExpires $true
         Log "Updated password for existing kiosk user: $HumanUser"
     }
-    # Kiosk account is a STANDARD user by design: every privileged action
-    # (updates, ACL changes, installs) must demand the admin password.
     $isAdmin = Get-LocalGroupMember -Group "Administrators" -Member $HumanUser -ErrorAction SilentlyContinue
     if ($isAdmin) {
         Remove-LocalGroupMember -Group "Administrators" -Member $HumanUser
         Log "Demoted $HumanUser to standard user (kiosk accounts must not be admins)."
-    } else {
-        Log "$HumanUser is a standard user (correct for a kiosk)."
-    }
+    } else { Log "$HumanUser is a standard user (correct for a kiosk)." }
     Set-ItemProperty $Winlogon "AutoAdminLogon"    "1"               -Type String
     Set-ItemProperty $Winlogon "DefaultUserName"   $HumanUser        -Type String
     Set-ItemProperty $Winlogon "DefaultPassword"   $PlainPass        -Type String
@@ -119,24 +125,52 @@ if ($Backup) {
     Move-Item $Backup "$InstallDir\Data" -Force
 }
 New-Item -ItemType Directory -Path "$InstallDir\Data" -Force | Out-Null
-
-# Runtime-writable working folders: Program Files (and the C:\ root) are
-# write-protected for standard tokens, so the account that RUNS the app needs
-# explicit Modify on exactly these - the fix for the SlideContent /
-# MediaContent / AppData UnauthorizedAccessException crashes.
 foreach ($w in @("SlideContent", "MediaContent", "AppData", "Recordings")) {
     $p = Join-Path $InstallDir $w
     New-Item -ItemType Directory -Path $p -Force | Out-Null
     icacls $p /grant "${HumanUser}:(OI)(CI)M" | Out-Null
 }
-# Data lockdown: runtime account + admins only; every other account denied.
 icacls "$InstallDir\Data" /inheritance:r /grant:r "SYSTEM:(OI)(CI)F" "Administrators:(OI)(CI)F" "${HumanUser}:(OI)(CI)RX" | Out-Null
 Set-Content "$MachineDir\current-version" $Release.tag_name
 
-# ---------------- [6/8] Cert + Kestrel + Drive key --------------------------
-Log "[6/8] HTTPS certificate, Kestrel binding, Drive key..."
+# ---------------- [6/8] Site survey + cert + machine config -----------------
+Log "[6/8] Site survey and machine configuration..."
+Write-Host ""
+Write-Host "  Answer for THIS PC's connected hardware (ENTER accepts the default):"
+$rightWall = Read-Host "  [1/3] Is a Right Wall display connected, in addition to the Left Wall? [Y/n]"
+$streaming = Read-Host "  [2/3] Is a Streaming/Broadcast display connected (CG overlay + encoder + stream output)? [y/N]"
+$sync      = Read-Host "  [3/3] Does this church sync Prayer/Announcement slides from Google Drive? [y/N]"
+$rightWallOn = ($rightWall -notmatch '^[nN]')
+$streamOn    = ($streaming -match '^[yY]')
+$syncOn      = ($sync -match '^[yY]')
+Log "Right Wall: $rightWallOn | Streaming/Broadcast: $streamOn | Drive sync: $syncOn"
+
+# ---- Google Drive key + folder IDs ----
+$keyJson  = "$MachineDir\key.json"
+$prayerId = ""; $annId = ""
+if ($syncOn) {
+    if (Test-Path $keyJson) { Log "Existing key.json found in $MachineDir - reusing." }
+    else {
+        try {
+            Log "Fetching secrets/drive-key.json from $GitHubOwner/$GitHubRepo..."
+            Invoke-WebRequest -Uri "https://api.github.com/repos/$GitHubOwner/$GitHubRepo/contents/secrets/drive-key.json" `
+                -Headers @{ Authorization = "Bearer $Token"; Accept = "application/vnd.github.raw" } -OutFile $keyJson
+        } catch {
+            Log "Repo download unavailable - falling back to a local copy."
+            $src = Read-Host "  Path to a local key.json (USB/share/laptop), or blank to skip sync"
+            if ($src -and (Test-Path $src)) { Copy-Item $src $keyJson -Force }
+        }
+    }
+    if (Test-Path $keyJson) {
+        icacls $keyJson /inheritance:r /grant:r "SYSTEM:F" "Administrators:F" "${HumanUser}:R" | Out-Null
+        $prayerId = Read-Host "  Prayer slides Google Drive folder ID"
+        $annId    = Read-Host "  Announcements slides Google Drive folder ID"
+    } else { $syncOn = $false; Log "No key available - Drive sync disabled on this machine." }
+}
+
+# ---- Machine-trusted HTTPS certificate ----
 $PfxPath = "$MachineDir\illumina.pfx"
-$PfxPass = "IlluminaKioskCert"   # non-secret by design; the PFX file is ACL-protected
+$PfxPass = "IlluminaKioskCert"
 $cert = Get-ChildItem Cert:\LocalMachine\My -ErrorAction SilentlyContinue |
         Where-Object { $_.FriendlyName -eq "Illumina Kiosk HTTPS" -and $_.NotAfter -gt (Get-Date).AddMonths(1) } |
         Select-Object -First 1
@@ -148,58 +182,44 @@ if (-not $cert) {
 }
 $sec = ConvertTo-SecureString -String $PfxPass -Force -AsPlainText
 Export-PfxCertificate -Cert $cert -FilePath $PfxPath -Password $sec -Force | Out-Null
-# The app PROCESS (standard kiosk token) must be able to READ the cert:
 icacls $PfxPath /inheritance:r /grant:r "SYSTEM:F" "Administrators:F" "${HumanUser}:R" | Out-Null
 
-# Per-machine overrides through the app's own supported layer. Existing keys
-# are preserved; only these sections are force-refreshed per install.
+# ---- Stamp machine truth into the overrides layer (merge, never clobber) ----
 $overridesPath = "$InstallDir\AppData\AppSettingsOverrides.json"
 if (Test-Path $overridesPath) { $obj = Get-Content $overridesPath -Raw | ConvertFrom-Json }
 else { $obj = [PSCustomObject]@{} }
+
 $obj | Add-Member -NotePropertyName "Kestrel" -Force -NotePropertyValue ([PSCustomObject]@{
     Certificates = [PSCustomObject]@{ Default = [PSCustomObject]@{ Path = $PfxPath; Password = $PfxPass } }
 })
-$obj | Add-Member -NotePropertyName "Urls" -Force -NotePropertyValue "https://0.0.0.0:$HttpPort"
+# Kept until base appsettings.json carries Urls; identical value, harmless.
+$obj | Add-Member -NotePropertyName "Urls" -Force -NotePropertyValue "https://0.0.0.0:$HttpPort;http://0.0.0.0:80"
 
-# ---- Google Drive slide sync (optional, per machine) ----
-# The service-account key is a SECRET: it never lives in the public installer
-# repo, the publish folder, or the release zip. It is fetched on demand from
-# the PRIVATE Illumina-Releases repo (secrets/drive-key.json) using the same
-# read-only token the installer already holds, or copied from a local path
-# (USB/share/laptop) - so there is never a manual pre-step.
-$keyJson = "$MachineDir\key.json"
-$sync = Read-Host "Enable Google Drive slide sync on this machine? (y/N)"
-if ($sync -match '^[yY]') {
-    if (Test-Path $keyJson) {
-        Log "Existing key.json found in $MachineDir - reusing."
-    } else {
-        try {
-            Log "Fetching secrets/drive-key.json from $GitHubOwner/$GitHubRepo..."
-            Invoke-WebRequest -Uri "https://api.github.com/repos/$GitHubOwner/$GitHubRepo/contents/secrets/drive-key.json" `
-                -Headers @{ Authorization = "Bearer $Token"; Accept = "application/vnd.github.raw" } `
-                -OutFile $keyJson
-        } catch {
-            Log "Repo download unavailable - falling back to a local copy."
-            $src = Read-Host "Path to a local key.json (USB/share/laptop), or blank to skip sync"
-            if ($src -and (Test-Path $src)) { Copy-Item $src $keyJson -Force }
-        }
-    }
-}
-if (Test-Path $keyJson) {
-    icacls $keyJson /inheritance:r /grant:r "SYSTEM:F" "Administrators:F" "${HumanUser}:R" | Out-Null
-}
-# Key + opt-in => sync on; anything else => folder IDs blanked so this machine
-# skips sync silently instead of logging missing-key errors forever.
-$drive = [PSCustomObject]@{}
-if ((Test-Path $keyJson) -and ($sync -match '^[yY]')) {
-    $drive | Add-Member -NotePropertyName "ServiceAccountKeyPath" -NotePropertyValue $keyJson
+if ($obj.PSObject.Properties.Name -notcontains "Kiosk") { $obj | Add-Member -NotePropertyName "Kiosk" -NotePropertyValue ([PSCustomObject]@{}) }
+$k = $obj.Kiosk
+$k | Add-Member -NotePropertyName "BaseUrl"          -NotePropertyValue $PortalUrl  -Force
+$k | Add-Member -NotePropertyName "Enabled"          -NotePropertyValue $true        -Force
+$k | Add-Member -NotePropertyName "RightWallEnabled" -NotePropertyValue $rightWallOn -Force
+$k | Add-Member -NotePropertyName "CgEnabled"        -NotePropertyValue $streamOn    -Force
+$k | Add-Member -NotePropertyName "ProgramEnabled"   -NotePropertyValue $streamOn    -Force
+if (-not $streamOn) { $k | Add-Member -NotePropertyName "CgConfidenceMonitorEnabled" -NotePropertyValue $false -Force }
+
+if ($obj.PSObject.Properties.Name -notcontains "SlideLibrary") { $obj | Add-Member -NotePropertyName "SlideLibrary" -NotePropertyValue ([PSCustomObject]@{}) }
+$sl = $obj.SlideLibrary
+if ($sl.PSObject.Properties.Name -notcontains "GoogleDrive") { $sl | Add-Member -NotePropertyName "GoogleDrive" -NotePropertyValue ([PSCustomObject]@{}) }
+$gd = $sl.GoogleDrive
+if ($syncOn) {
+    $gd | Add-Member -NotePropertyName "ServiceAccountKeyPath" -NotePropertyValue $keyJson  -Force
+    $gd | Add-Member -NotePropertyName "PrayerFolderId"        -NotePropertyValue $prayerId -Force
+    $gd | Add-Member -NotePropertyName "AnnouncementsFolderId" -NotePropertyValue $annId    -Force
     Log "Google Drive sync ENABLED via $keyJson"
 } else {
-    $drive | Add-Member -NotePropertyName "PrayerFolderId"        -NotePropertyValue ""
-    $drive | Add-Member -NotePropertyName "AnnouncementsFolderId" -NotePropertyValue ""
+    # Explicit blanks shadow any personal IDs still in the shipped appsettings.json
+    $gd | Add-Member -NotePropertyName "ServiceAccountKeyPath" -NotePropertyValue "" -Force
+    $gd | Add-Member -NotePropertyName "PrayerFolderId"        -NotePropertyValue "" -Force
+    $gd | Add-Member -NotePropertyName "AnnouncementsFolderId" -NotePropertyValue "" -Force
     Log "Google Drive sync disabled on this machine."
 }
-$obj | Add-Member -NotePropertyName "SlideLibrary" -Force -NotePropertyValue ([PSCustomObject]@{ GoogleDrive = $drive })
 $obj | ConvertTo-Json -Depth 10 | Set-Content $overridesPath
 
 # ---------------- Chrome + helpers + shortcuts ------------------------------
@@ -217,7 +237,7 @@ $PortalLine = if ($ChromeExe) { "Start-Process '$ChromeExe' -ArgumentList '$Port
 
 Log "[7/8] Writing helper scripts and shortcuts..."
 $AppExe  = "$InstallDir\Illumina.exe"
-$EnvUrls = "https://0.0.0.0:$HttpPort"
+$EnvUrls = "https://0.0.0.0:$HttpPort;http://0.0.0.0:80"
 
 $open = @'
 param([int]$DelaySeconds = 0, [switch]$NoPortal)
@@ -274,8 +294,10 @@ $a.Save()
 
 # ---------------- [8/8] Firewall + power + summary --------------------------
 Log "[8/8] Firewall and power..."
-Remove-NetFirewallRule -DisplayName "Illumina Web App" -ErrorAction SilentlyContinue
-New-NetFirewallRule -DisplayName "Illumina Web App" -Direction Inbound -LocalPort $HttpPort -Protocol TCP -Action Allow | Out-Null
+Remove-NetFirewallRule -DisplayName "Illumina Web App"    -ErrorAction SilentlyContinue
+Remove-NetFirewallRule -DisplayName "Illumina Phones HTTP" -ErrorAction SilentlyContinue
+New-NetFirewallRule -DisplayName "Illumina Web App"    -Direction Inbound -LocalPort $HttpPort -Protocol TCP -Action Allow | Out-Null
+New-NetFirewallRule -DisplayName "Illumina Phones HTTP" -Direction Inbound -LocalPort 80      -Protocol TCP -Action Allow | Out-Null
 powercfg /change standby-timeout-ac 0 | Out-Null
 powercfg /change monitor-timeout-ac 0 | Out-Null
 
@@ -283,8 +305,10 @@ Write-Host @"
 ==================================================
    Installation complete! ($($Release.tag_name))
    Kiosk account : $HumanUser (standard user)
+   Right Wall    : $rightWallOn
+   Streaming     : $streamOn
+   Drive sync    : $syncOn
    Portal        : $PortalUrl
-   Machine store : $MachineDir (token, cert, key.json)
 ==================================================
 "@ -ForegroundColor Cyan
 $ans = Read-Host "Reboot now to apply auto sign-in? [Y/n]"
