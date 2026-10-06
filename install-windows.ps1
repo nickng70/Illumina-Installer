@@ -1,15 +1,14 @@
 #Requires -RunAsAdministrator
 <#
-    Illumina AVA PC Installer - Windows 10/11 (v6.4 FINAL)
-    - Numbered kiosk-account menu (ENTER = recommended avauser, standard user);
+    Illumina AVA PC Installer - Windows 10/11 (v6.5 FINAL)
+    - Numbered kiosk-account menu (ENTER = 1 = avauser, standard user);
       "current" mode shows your real username and skips portal auto-open
-    - Site survey: Right Wall / Streaming-Broadcast / Google Drive sync,
-      stamped per-machine into AppData/AppSettingsOverrides.json (merged
-      key-by-key, never clobbering Settings-saved geometry)
-    - Readiness-polled helpers: Chrome only opens once https://localhost
-      actually answers, so boot-time tabs never land on blank/error pages
-    - Binaries in Program Files (tamper-protected); runtime-writable folders
-      ACL-granted to the kiosk account; Data locked to runtime account + admins
+    - Site survey defaults to NO everywhere (ENTER = No, the capital letter);
+      only the account menu defaults to its recommended option
+    - Readiness-polled helpers with %TEMP% logging and a 3-minute fallback
+      open, so a slow cold boot degrades to a refreshable page, not silence
+    - Binaries in Program Files; runtime-writable folders ACL-granted;
+      Data locked to runtime account + Administrators
     - Machine-trusted 100-year HTTPS cert; Kestrel bound via overrides
     - Drive key auto-fetched from secrets/drive-key.json (private repo) or
       copied from a local path - never shipped, never a manual pre-step
@@ -32,7 +31,7 @@ $AutoOpenPortalAtLogon = $true
 function Log($m) { Write-Host "`n==> $m" -ForegroundColor Green }
 
 Write-Host "==================================================" -ForegroundColor Cyan
-Write-Host "   Illumina AVA PC Installer (Windows) v6.4       " -ForegroundColor Cyan
+Write-Host "   Illumina AVA PC Installer (Windows) v6.5       " -ForegroundColor Cyan
 Write-Host "==================================================" -ForegroundColor Cyan
 
 # ---------------- [1/8] GitHub token ----------------------------------------
@@ -71,7 +70,7 @@ Log "[4/8] Choosing the kiosk account..."
 Write-Host ""
 Write-Host "  [1] avauser       - dedicated kiosk account (recommended for church AVA PCs)"
 Write-Host "  [2] $env:USERNAME - your current Windows account (local testing)"
-$mode = Read-Host "Choose kiosk account (press ENTER for 1)"
+$mode = Read-Host "Choose kiosk account (press ENTER or 1 for avauser, 2 for current)"
 $Winlogon = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon"
 
 if ($mode -eq '2') {
@@ -149,11 +148,11 @@ Set-Content "$MachineDir\current-version" $Release.tag_name
 # ---------------- [6/8] Site survey + cert + machine config -----------------
 Log "[6/8] Site survey and machine configuration..."
 Write-Host ""
-Write-Host "  Answer for THIS PC's connected hardware (ENTER accepts the default):"
-$rightWall = Read-Host "  [1/3] Is a Right Wall display connected, in addition to the Left Wall? [Y/n]"
+Write-Host "  For every Yes/No question below, pressing ENTER selects No (the capital letter)."
+$rightWall = Read-Host "  [1/3] Is a Right Wall display connected, in addition to the Left Wall? [y/N]"
 $streaming = Read-Host "  [2/3] Is a Streaming/Broadcast display connected (CG overlay + encoder + stream output)? [y/N]"
 $sync      = Read-Host "  [3/3] Does this church sync Prayer/Announcement slides from Google Drive? [y/N]"
-$rightWallOn = ($rightWall -notmatch '^[nN]')
+$rightWallOn = ($rightWall -match '^[yY]')
 $streamOn    = ($streaming -match '^[yY]')
 $syncOn      = ($sync -match '^[yY]')
 Log "Right Wall: $rightWallOn | Streaming/Broadcast: $streamOn | Drive sync: $syncOn"
@@ -178,6 +177,10 @@ if ($syncOn) {
         icacls $keyJson /inheritance:r /grant:r "SYSTEM:F" "Administrators:F" "${HumanUser}:R" | Out-Null
         $prayerId = Read-Host "  Prayer slides Google Drive folder ID"
         $annId    = Read-Host "  Announcements slides Google Drive folder ID"
+        if (-not $prayerId -or -not $annId) {
+            $syncOn = $false
+            Log "Folder IDs incomplete - Drive sync disabled on this machine."
+        }
     } else { $syncOn = $false; Log "No key available - Drive sync disabled on this machine." }
 }
 
@@ -213,7 +216,7 @@ if ($obj.PSObject.Properties.Name -notcontains "Kiosk") { $obj | Add-Member -Not
 $k = $obj.Kiosk
 $k | Add-Member -NotePropertyName "BaseUrl"          -NotePropertyValue $PortalUrl   -Force
 $k | Add-Member -NotePropertyName "Enabled"          -NotePropertyValue $true         -Force
-$k | Add-Member -NotePropertyName "RightWallEnabled" -NotePropertyValue $rightWallOn  -Force
+$k | Add-Member -NotePropertyName "RightWallEnabled" -NotePropertyValue $rightWallOn -Force
 $k | Add-Member -NotePropertyName "CgEnabled"        -NotePropertyValue $streamOn     -Force
 $k | Add-Member -NotePropertyName "ProgramEnabled"   -NotePropertyValue $streamOn     -Force
 if (-not $streamOn) { $k | Add-Member -NotePropertyName "CgConfidenceMonitorEnabled" -NotePropertyValue $false -Force }
@@ -236,7 +239,7 @@ if ($syncOn) {
 }
 $obj | ConvertTo-Json -Depth 10 | Set-Content $overridesPath
 
-# ---------------- [7/8] Helpers + shortcuts (readiness-polled) --------------
+# ---------------- [7/8] Helpers + shortcuts (polled, logged, fallback) ------
 # Portal auto-open at logon is KIOSK behavior: a dedicated avauser boots
 # straight into the service (zero-click), while a personal "current" account
 # only gets the app running silently - a stray auto-opened portal tab would
@@ -263,26 +266,38 @@ $EnvUrls = "https://0.0.0.0:$HttpPort;http://0.0.0.0:80"
 
 $open = @'
 param([int]$DelaySeconds = 0, [switch]$NoPortal)
+$log = Join-Path $env:TEMP "Illumina-open.log"
+function W($m) { Add-Content -Path $log -Value ("{0:yyyy-MM-dd HH:mm:ss} {1}" -f (Get-Date), $m) -ErrorAction SilentlyContinue }
+W "helper start (Delay=$DelaySeconds, NoPortal=$NoPortal, user=$env:USERNAME)"
 if ($DelaySeconds -gt 0) { Start-Sleep -Seconds $DelaySeconds }
 $env:ASPNETCORE_URLS = "__ENV_URLS__"
 $app = "__APP__"
 if (-not (Get-Process -Name Illumina -ErrorAction SilentlyContinue)) {
     Start-Process $app -WorkingDirectory (Split-Path $app) -WindowStyle Hidden
-}
-# Wait until the portal ACTUALLY answers before opening Chrome, so an
-# auto-opened tab never lands on a blank/error page during cold boot
-# (Kestrel binds only after startup finishes loading Bible/hymns/indexes).
+    W "started Illumina.exe (hidden)"
+} else { W "Illumina.exe already running - not starting a second one" }
+# Wait until the portal ACTUALLY answers before opening Chrome, so the
+# auto-opened tab never lands on a blank page during cold boot. ~3 minutes
+# of patience; if it STILL never answers, open anyway - a refreshable error
+# page is a better volunteer signal than silence.
 $ready = $false
-for ($i = 0; $i -lt 30; $i++) {
-    try { Invoke-WebRequest -Uri "__PROBE__" -UseBasicParsing -TimeoutSec 2 | Out-Null; $ready = $true; break }
+for ($i = 1; $i -le 45; $i++) {
+    try { Invoke-WebRequest -Uri "__PROBE__" -UseBasicParsing -TimeoutSec 2 | Out-Null; $ready = $true; W "portal answered on attempt $i"; break }
     catch { Start-Sleep -Seconds 2 }
 }
-if (-not $NoPortal -and $ready) { __PORTAL__ }
+if (-not $ready) { W "portal still not answering after 45 attempts - opening anyway as a signal" }
+if (-not $NoPortal) {
+    __PORTAL__
+    W "portal open command issued (ready=$ready)"
+} else { W "NoPortal - skipping browser open" }
 '@
 $open = $open -replace '__APP__', $AppExe -replace '__PORTAL__', $PortalLine -replace '__ENV_URLS__', $EnvUrls -replace '__PROBE__', $PortalUrl
 Set-Content "$InstallDir\open-illumina.ps1" $open
 
 $restart = @'
+$log = Join-Path $env:TEMP "Illumina-restart.log"
+function W($m) { Add-Content -Path $log -Value ("{0:yyyy-MM-dd HH:mm:ss} {1}" -f (Get-Date), $m) -ErrorAction SilentlyContinue }
+W "restart requested by $env:USERNAME"
 Get-Process -Name Illumina -ErrorAction SilentlyContinue | Stop-Process -Force
 Get-Process -Name chrome   -ErrorAction SilentlyContinue | Stop-Process -Force
 Start-Sleep -Seconds 2
@@ -290,15 +305,16 @@ Remove-Item -Recurse -Force "$env:TEMP\IlluminaKiosk" -ErrorAction SilentlyConti
 $env:ASPNETCORE_URLS = "__ENV_URLS__"
 $app = "__APP__"
 Start-Process $app -WorkingDirectory (Split-Path $app) -WindowStyle Hidden
-# A human clicked this button, so the portal ALWAYS opens - but we wait for
-# readiness first so they land on a live portal, not a blank page. If the app
-# is genuinely broken, the error page after the timeout is itself the signal.
+W "started Illumina.exe (hidden)"
 $ready = $false
-for ($i = 0; $i -lt 30; $i++) {
-    try { Invoke-WebRequest -Uri "__PROBE__" -UseBasicParsing -TimeoutSec 2 | Out-Null; $ready = $true; break }
+for ($i = 1; $i -le 45; $i++) {
+    try { Invoke-WebRequest -Uri "__PROBE__" -UseBasicParsing -TimeoutSec 2 | Out-Null; $ready = $true; W "portal answered on attempt $i"; break }
     catch { Start-Sleep -Seconds 2 }
 }
+# A human clicked this button, so the portal ALWAYS opens - readiness first
+# when possible, and after a long failure the error page is itself the signal.
 __PORTAL__
+W "portal open command issued (ready=$ready)"
 '@
 $restart = $restart -replace '__APP__', $AppExe -replace '__PORTAL__', $PortalLine -replace '__ENV_URLS__', $EnvUrls -replace '__PROBE__', $PortalUrl
 Set-Content "$InstallDir\restart-illumina.ps1" $restart
@@ -347,7 +363,9 @@ Write-Host @"
    Portal at boot: $portalAtLogon
    Portal        : $PortalUrl
    Machine store : $MachineDir (token, cert, key.json)
+   Helper logs   : %TEMP%\Illumina-open.log / Illumina-restart.log
+   NOTE: auto sign-in activates at the NEXT reboot.
 ==================================================
 "@ -ForegroundColor Cyan
-$ans = Read-Host "Reboot now to apply auto sign-in? [Y/n]"
-if ($ans -notmatch '^[nN]') { Restart-Computer }
+$ans = Read-Host "Reboot now? [y/N] (ENTER = No, reboot later when convenient)"
+if ($ans -match '^[yY]') { Restart-Computer }
