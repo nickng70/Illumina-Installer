@@ -1,15 +1,18 @@
 #Requires -RunAsAdministrator
 <#
-    Illumina AVA PC Installer - Windows 10/11 (v6.3 FINAL)
-    - Numbered kiosk-account menu (ENTER = recommended avauser, standard user)
+    Illumina AVA PC Installer - Windows 10/11 (v6.4 FINAL)
+    - Numbered kiosk-account menu (ENTER = recommended avauser, standard user);
+      "current" mode shows your real username and skips portal auto-open
     - Site survey: Right Wall / Streaming-Broadcast / Google Drive sync,
-      stamped per-machine into AppData/AppSettingsOverrides.json (merged,
-      never clobbering Settings-saved geometry)
-    - Binaries in Program Files; runtime-writable folders ACL-granted;
-      Data locked to runtime account + Administrators
+      stamped per-machine into AppData/AppSettingsOverrides.json (merged
+      key-by-key, never clobbering Settings-saved geometry)
+    - Readiness-polled helpers: Chrome only opens once https://localhost
+      actually answers, so boot-time tabs never land on blank/error pages
+    - Binaries in Program Files (tamper-protected); runtime-writable folders
+      ACL-granted to the kiosk account; Data locked to runtime account + admins
     - Machine-trusted 100-year HTTPS cert; Kestrel bound via overrides
-    - Drive key auto-fetched from secrets/drive-key.json (private repo)
-      or copied from a local path - never shipped, never a manual pre-step
+    - Drive key auto-fetched from secrets/drive-key.json (private repo) or
+      copied from a local path - never shipped, never a manual pre-step
 #>
 $ErrorActionPreference = "Stop"
 
@@ -18,7 +21,7 @@ $GitHubOwner = "nickng70"
 $GitHubRepo  = "Illumina-Releases"
 $AssetName   = "illumina-win-x64.zip"
 $InstallDir  = "C:\Program Files\Illumina"
-$MachineDir  = "C:\ProgramData\Illumina"
+$MachineDir  = "C:\ProgramData\Illumina"   # update-surviving machine store
 $HttpPort    = "443"
 $PortalUrl   = "https://localhost"
 $TokenFile   = "$MachineDir\github-token"
@@ -29,7 +32,7 @@ $AutoOpenPortalAtLogon = $true
 function Log($m) { Write-Host "`n==> $m" -ForegroundColor Green }
 
 Write-Host "==================================================" -ForegroundColor Cyan
-Write-Host "   Illumina AVA PC Installer (Windows) v6.3       " -ForegroundColor Cyan
+Write-Host "   Illumina AVA PC Installer (Windows) v6.4       " -ForegroundColor Cyan
 Write-Host "==================================================" -ForegroundColor Cyan
 
 # ---------------- [1/8] GitHub token ----------------------------------------
@@ -88,6 +91,8 @@ else {
     $existing  = Get-LocalUser -Name $HumanUser -ErrorAction SilentlyContinue
     $PlainPass = Read-Host "SECRET admin-gate password for $HumanUser (ENTER keeps existing)"
     if (-not $PlainPass) {
+        # Re-run convenience: reuse the password auto-login already stores,
+        # so updates are a pure ENTER-ENTER-ENTER affair.
         $PlainPass = (Get-ItemProperty $Winlogon -ErrorAction SilentlyContinue).DefaultPassword
         if (-not $PlainPass) { throw "No stored password found - please type one." }
         Log "Keeping existing password for $HumanUser."
@@ -100,6 +105,8 @@ else {
         Set-LocalUser -Name $HumanUser -Password $Sec -PasswordNeverExpires $true
         Log "Updated password for existing kiosk user: $HumanUser"
     }
+    # Kiosk account is a STANDARD user by design: every privileged action
+    # (updates, ACL changes, installs) must demand the admin password.
     $isAdmin = Get-LocalGroupMember -Group "Administrators" -Member $HumanUser -ErrorAction SilentlyContinue
     if ($isAdmin) {
         Remove-LocalGroupMember -Group "Administrators" -Member $HumanUser
@@ -125,11 +132,17 @@ if ($Backup) {
     Move-Item $Backup "$InstallDir\Data" -Force
 }
 New-Item -ItemType Directory -Path "$InstallDir\Data" -Force | Out-Null
+
+# Runtime-writable working folders: Program Files (and the C:\ root) are
+# write-protected for standard tokens, so the account that RUNS the app needs
+# explicit Modify on exactly these - the fix for the SlideContent /
+# MediaContent / AppData UnauthorizedAccessException crashes.
 foreach ($w in @("SlideContent", "MediaContent", "AppData", "Recordings")) {
     $p = Join-Path $InstallDir $w
     New-Item -ItemType Directory -Path $p -Force | Out-Null
     icacls $p /grant "${HumanUser}:(OI)(CI)M" | Out-Null
 }
+# Data lockdown: runtime account + admins only; every other account denied.
 icacls "$InstallDir\Data" /inheritance:r /grant:r "SYSTEM:(OI)(CI)F" "Administrators:(OI)(CI)F" "${HumanUser}:(OI)(CI)RX" | Out-Null
 Set-Content "$MachineDir\current-version" $Release.tag_name
 
@@ -170,7 +183,7 @@ if ($syncOn) {
 
 # ---- Machine-trusted HTTPS certificate ----
 $PfxPath = "$MachineDir\illumina.pfx"
-$PfxPass = "IlluminaKioskCert"
+$PfxPass = "IlluminaKioskCert"   # non-secret by design; the PFX file is ACL-protected
 $cert = Get-ChildItem Cert:\LocalMachine\My -ErrorAction SilentlyContinue |
         Where-Object { $_.FriendlyName -eq "Illumina Kiosk HTTPS" -and $_.NotAfter -gt (Get-Date).AddMonths(1) } |
         Select-Object -First 1
@@ -182,6 +195,7 @@ if (-not $cert) {
 }
 $sec = ConvertTo-SecureString -String $PfxPass -Force -AsPlainText
 Export-PfxCertificate -Cert $cert -FilePath $PfxPath -Password $sec -Force | Out-Null
+# The app PROCESS (standard kiosk token) must be able to READ the cert:
 icacls $PfxPath /inheritance:r /grant:r "SYSTEM:F" "Administrators:F" "${HumanUser}:R" | Out-Null
 
 # ---- Stamp machine truth into the overrides layer (merge, never clobber) ----
@@ -197,11 +211,11 @@ $obj | Add-Member -NotePropertyName "Urls" -Force -NotePropertyValue "https://0.
 
 if ($obj.PSObject.Properties.Name -notcontains "Kiosk") { $obj | Add-Member -NotePropertyName "Kiosk" -NotePropertyValue ([PSCustomObject]@{}) }
 $k = $obj.Kiosk
-$k | Add-Member -NotePropertyName "BaseUrl"          -NotePropertyValue $PortalUrl  -Force
-$k | Add-Member -NotePropertyName "Enabled"          -NotePropertyValue $true        -Force
-$k | Add-Member -NotePropertyName "RightWallEnabled" -NotePropertyValue $rightWallOn -Force
-$k | Add-Member -NotePropertyName "CgEnabled"        -NotePropertyValue $streamOn    -Force
-$k | Add-Member -NotePropertyName "ProgramEnabled"   -NotePropertyValue $streamOn    -Force
+$k | Add-Member -NotePropertyName "BaseUrl"          -NotePropertyValue $PortalUrl   -Force
+$k | Add-Member -NotePropertyName "Enabled"          -NotePropertyValue $true         -Force
+$k | Add-Member -NotePropertyName "RightWallEnabled" -NotePropertyValue $rightWallOn  -Force
+$k | Add-Member -NotePropertyName "CgEnabled"        -NotePropertyValue $streamOn     -Force
+$k | Add-Member -NotePropertyName "ProgramEnabled"   -NotePropertyValue $streamOn     -Force
 if (-not $streamOn) { $k | Add-Member -NotePropertyName "CgConfidenceMonitorEnabled" -NotePropertyValue $false -Force }
 
 if ($obj.PSObject.Properties.Name -notcontains "SlideLibrary") { $obj | Add-Member -NotePropertyName "SlideLibrary" -NotePropertyValue ([PSCustomObject]@{}) }
@@ -222,7 +236,15 @@ if ($syncOn) {
 }
 $obj | ConvertTo-Json -Depth 10 | Set-Content $overridesPath
 
-# ---------------- Chrome + helpers + shortcuts ------------------------------
+# ---------------- [7/8] Helpers + shortcuts (readiness-polled) --------------
+# Portal auto-open at logon is KIOSK behavior: a dedicated avauser boots
+# straight into the service (zero-click), while a personal "current" account
+# only gets the app running silently - a stray auto-opened portal tab would
+# also count as LOCAL presence and keep the walls alive unintentionally.
+$portalAtLogon = ($mode -ne '2') -and $AutoOpenPortalAtLogon
+Log $(if ($portalAtLogon) { "Logon behavior: app + portal auto-open (kiosk mode)." }
+      else { "Logon behavior: app starts silently - no browser auto-open." })
+
 function Resolve-Chrome {
     foreach ($c in @("C:\Program Files\Google\Chrome\Application\chrome.exe",
                      "C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
@@ -246,11 +268,18 @@ $env:ASPNETCORE_URLS = "__ENV_URLS__"
 $app = "__APP__"
 if (-not (Get-Process -Name Illumina -ErrorAction SilentlyContinue)) {
     Start-Process $app -WorkingDirectory (Split-Path $app) -WindowStyle Hidden
-    Start-Sleep -Seconds 4
 }
-if (-not $NoPortal) { __PORTAL__ }
+# Wait until the portal ACTUALLY answers before opening Chrome, so an
+# auto-opened tab never lands on a blank/error page during cold boot
+# (Kestrel binds only after startup finishes loading Bible/hymns/indexes).
+$ready = $false
+for ($i = 0; $i -lt 30; $i++) {
+    try { Invoke-WebRequest -Uri "__PROBE__" -UseBasicParsing -TimeoutSec 2 | Out-Null; $ready = $true; break }
+    catch { Start-Sleep -Seconds 2 }
+}
+if (-not $NoPortal -and $ready) { __PORTAL__ }
 '@
-$open = $open -replace '__APP__', $AppExe -replace '__PORTAL__', $PortalLine -replace '__ENV_URLS__', $EnvUrls
+$open = $open -replace '__APP__', $AppExe -replace '__PORTAL__', $PortalLine -replace '__ENV_URLS__', $EnvUrls -replace '__PROBE__', $PortalUrl
 Set-Content "$InstallDir\open-illumina.ps1" $open
 
 $restart = @'
@@ -261,10 +290,17 @@ Remove-Item -Recurse -Force "$env:TEMP\IlluminaKiosk" -ErrorAction SilentlyConti
 $env:ASPNETCORE_URLS = "__ENV_URLS__"
 $app = "__APP__"
 Start-Process $app -WorkingDirectory (Split-Path $app) -WindowStyle Hidden
-Start-Sleep -Seconds 4
+# A human clicked this button, so the portal ALWAYS opens - but we wait for
+# readiness first so they land on a live portal, not a blank page. If the app
+# is genuinely broken, the error page after the timeout is itself the signal.
+$ready = $false
+for ($i = 0; $i -lt 30; $i++) {
+    try { Invoke-WebRequest -Uri "__PROBE__" -UseBasicParsing -TimeoutSec 2 | Out-Null; $ready = $true; break }
+    catch { Start-Sleep -Seconds 2 }
+}
 __PORTAL__
 '@
-$restart = $restart -replace '__APP__', $AppExe -replace '__PORTAL__', $PortalLine -replace '__ENV_URLS__', $EnvUrls
+$restart = $restart -replace '__APP__', $AppExe -replace '__PORTAL__', $PortalLine -replace '__ENV_URLS__', $EnvUrls -replace '__PROBE__', $PortalUrl
 Set-Content "$InstallDir\restart-illumina.ps1" $restart
 
 $Wsh     = New-Object -ComObject WScript.Shell
@@ -289,14 +325,14 @@ $r.Save()
 
 $a = $Wsh.CreateShortcut("$Startup\Illumina Startup.lnk")
 $a.TargetPath = $PsExe
-$a.Arguments  = "-ExecutionPolicy Bypass -WindowStyle Hidden -File `"$InstallDir\open-illumina.ps1`" -DelaySeconds $LogonDelaySeconds" + $(if ($AutoOpenPortalAtLogon) { "" } else { " -NoPortal" })
+$a.Arguments  = "-ExecutionPolicy Bypass -WindowStyle Hidden -File `"$InstallDir\open-illumina.ps1`" -DelaySeconds $LogonDelaySeconds" + $(if ($portalAtLogon) { "" } else { " -NoPortal" })
 $a.Save()
 
 # ---------------- [8/8] Firewall + power + summary --------------------------
 Log "[8/8] Firewall and power..."
-Remove-NetFirewallRule -DisplayName "Illumina Web App"    -ErrorAction SilentlyContinue
+Remove-NetFirewallRule -DisplayName "Illumina Web App"      -ErrorAction SilentlyContinue
 Remove-NetFirewallRule -DisplayName "Illumina Phones HTTP" -ErrorAction SilentlyContinue
-New-NetFirewallRule -DisplayName "Illumina Web App"    -Direction Inbound -LocalPort $HttpPort -Protocol TCP -Action Allow | Out-Null
+New-NetFirewallRule -DisplayName "Illumina Web App"      -Direction Inbound -LocalPort $HttpPort -Protocol TCP -Action Allow | Out-Null
 New-NetFirewallRule -DisplayName "Illumina Phones HTTP" -Direction Inbound -LocalPort 80      -Protocol TCP -Action Allow | Out-Null
 powercfg /change standby-timeout-ac 0 | Out-Null
 powercfg /change monitor-timeout-ac 0 | Out-Null
@@ -308,7 +344,9 @@ Write-Host @"
    Right Wall    : $rightWallOn
    Streaming     : $streamOn
    Drive sync    : $syncOn
+   Portal at boot: $portalAtLogon
    Portal        : $PortalUrl
+   Machine store : $MachineDir (token, cert, key.json)
 ==================================================
 "@ -ForegroundColor Cyan
 $ans = Read-Host "Reboot now to apply auto sign-in? [Y/n]"
