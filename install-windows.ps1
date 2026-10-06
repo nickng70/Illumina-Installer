@@ -319,30 +319,53 @@ W "portal open command issued (ready=$ready)"
 $restart = $restart -replace '__APP__', $AppExe -replace '__PORTAL__', $PortalLine -replace '__ENV_URLS__', $EnvUrls -replace '__PROBE__', $PortalUrl
 Set-Content "$InstallDir\restart-illumina.ps1" $restart
 
-$Wsh     = New-Object -ComObject WScript.Shell
-$Startup = [Environment]::GetFolderPath("CommonStartup")
-$Desktop = [Environment]::GetFolderPath("CommonDesktopDirectory")
-Get-ChildItem $Startup -Filter "Illumina*.lnk"         -ErrorAction SilentlyContinue | Remove-Item -Force
-Get-ChildItem $Desktop -Filter "Illumina*.lnk"         -ErrorAction SilentlyContinue | Remove-Item -Force
-Get-ChildItem $Desktop -Filter "Restart Illumina*.lnk" -ErrorAction SilentlyContinue | Remove-Item -Force
+$Wsh = New-Object -ComObject WScript.Shell
+# Per-user locations for the KIOSK account ($HumanUser), not the public/
+# all-users ones: the icons and the logon autostart belong to the account
+# that actually runs the service. A church admin logging in for maintenance
+# then gets a clean session with no walls spawning, and on a dev laptop the
+# two accounts never start each other's instances.
+if ($HumanUser -eq $env:USERNAME) {
+    # Respect OneDrive Known-Folder redirection for the current user.
+    $UserDesktop = [Environment]::GetFolderPath("Desktop")
+    $UserStartup = [Environment]::GetFolderPath("Startup")
+} else {
+    # Target account's profile - may not exist yet (avauser's first logon is
+    # still to come); Windows adopts a pre-created profile folder at logon.
+    $UserDesktop = "C:\Users\$HumanUser\Desktop"
+    $UserStartup = "C:\Users\$HumanUser\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup"
+    New-Item -ItemType Directory -Path $UserDesktop -Force | Out-Null
+    New-Item -ItemType Directory -Path $UserStartup -Force | Out-Null
+}
+# Retire any shortcuts left in the public/all-users locations by older
+# installer versions, so there is exactly ONE set, in the right place.
+$CommonDesktop = [Environment]::GetFolderPath("CommonDesktopDirectory")
+$CommonStartup = [Environment]::GetFolderPath("CommonStartup")
+Get-ChildItem $CommonStartup -Filter "Illumina*.lnk"         -ErrorAction SilentlyContinue | Remove-Item -Force
+Get-ChildItem $CommonDesktop -Filter "Illumina*.lnk"         -ErrorAction SilentlyContinue | Remove-Item -Force
+Get-ChildItem $CommonDesktop -Filter "Restart Illumina*.lnk" -ErrorAction SilentlyContinue | Remove-Item -Force
+Get-ChildItem $UserStartup  -Filter "Illumina*.lnk"         -ErrorAction SilentlyContinue | Remove-Item -Force
+Get-ChildItem $UserDesktop  -Filter "Illumina*.lnk"         -ErrorAction SilentlyContinue | Remove-Item -Force
+Get-ChildItem $UserDesktop  -Filter "Restart Illumina*.lnk" -ErrorAction SilentlyContinue | Remove-Item -Force
 $PsExe = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
 
-$s = $Wsh.CreateShortcut("$Desktop\Illumina.lnk")
+$s = $Wsh.CreateShortcut("$UserDesktop\Illumina.lnk")
 $s.TargetPath   = $PsExe
 $s.Arguments    = "-ExecutionPolicy Bypass -WindowStyle Hidden -File `"$InstallDir\open-illumina.ps1`""
 $s.IconLocation = $(if ($ChromeExe) { "$ChromeExe,0" } else { "shell32.dll,14" })
 $s.Save()
 
-$r = $Wsh.CreateShortcut("$Desktop\Restart Illumina (if misbehaving).lnk")
+$r = $Wsh.CreateShortcut("$UserDesktop\Restart Illumina (if misbehaving).lnk")
 $r.TargetPath   = $PsExe
 $r.Arguments    = "-ExecutionPolicy Bypass -WindowStyle Hidden -File `"$InstallDir\restart-illumina.ps1`""
 $r.IconLocation = "shell32.dll,238"
 $r.Save()
 
-$a = $Wsh.CreateShortcut("$Startup\Illumina Startup.lnk")
+$a = $Wsh.CreateShortcut("$UserStartup\Illumina Startup.lnk")
 $a.TargetPath = $PsExe
 $a.Arguments  = "-ExecutionPolicy Bypass -WindowStyle Hidden -File `"$InstallDir\open-illumina.ps1`" -DelaySeconds $LogonDelaySeconds" + $(if ($portalAtLogon) { "" } else { " -NoPortal" })
 $a.Save()
+Log "Shortcuts + logon autostart installed for $HumanUser only."
 
 # ---------------- [8/8] Firewall + power + summary --------------------------
 Log "[8/8] Firewall and power..."
