@@ -239,11 +239,7 @@ if ($syncOn) {
 }
 $obj | ConvertTo-Json -Depth 10 | Set-Content $overridesPath
 
-# ---------------- [7/8] Helpers + shortcuts (polled, logged, fallback) ------
-# Portal auto-open at logon is KIOSK behavior: a dedicated avauser boots
-# straight into the service (zero-click), while a personal "current" account
-# only gets the app running silently - a stray auto-opened portal tab would
-# also count as LOCAL presence and keep the walls alive unintentionally.
+# ---------------- [7/8] Helpers + shortcuts (TCP-probed, logged) ------------
 $portalAtLogon = ($mode -ne '2') -and $AutoOpenPortalAtLogon
 Log $(if ($portalAtLogon) { "Logon behavior: app + portal auto-open (kiosk mode)." }
       else { "Logon behavior: app starts silently - no browser auto-open." })
@@ -268,6 +264,12 @@ $open = @'
 param([int]$DelaySeconds = 0, [switch]$NoPortal)
 $log = Join-Path $env:TEMP "Illumina-open.log"
 function W($m) { Add-Content -Path $log -Value ("{0:yyyy-MM-dd HH:mm:ss} {1}" -f (Get-Date), $m) -ErrorAction SilentlyContinue }
+function Probe([int]$port) {
+    $c = $null
+    try { $c = New-Object System.Net.Sockets.TcpClient; $c.Connect('127.0.0.1', $port); return $true }
+    catch { return $false }
+    finally { if ($c) { $c.Close() } }
+}
 W "helper start (Delay=$DelaySeconds, NoPortal=$NoPortal, user=$env:USERNAME)"
 if ($DelaySeconds -gt 0) { Start-Sleep -Seconds $DelaySeconds }
 $env:ASPNETCORE_URLS = "__ENV_URLS__"
@@ -276,27 +278,34 @@ if (-not (Get-Process -Name Illumina -ErrorAction SilentlyContinue)) {
     Start-Process $app -WorkingDirectory (Split-Path $app) -WindowStyle Hidden
     W "started Illumina.exe (hidden)"
 } else { W "Illumina.exe already running - not starting a second one" }
-# Wait until the portal ACTUALLY answers before opening Chrome, so the
-# auto-opened tab never lands on a blank page during cold boot. ~3 minutes
-# of patience; if it STILL never answers, open anyway - a refreshable error
-# page is a better volunteer signal than silence.
+# TCP readiness probe: proxy-immune and cert-immune (unlike Invoke-WebRequest,
+# which honors system proxy/WPAD and can stall for seconds per attempt on
+# localhost - the old blank-hung-terminal bug). Kestrel binds only after
+# startup finishes loading, so "port open" means "app ready".
 $ready = $false
-for ($i = 1; $i -le 45; $i++) {
-    try { Invoke-WebRequest -Uri "__PROBE__" -UseBasicParsing -TimeoutSec 2 | Out-Null; $ready = $true; W "portal answered on attempt $i"; break }
-    catch { Start-Sleep -Seconds 2 }
+for ($i = 1; $i -le 60; $i++) {
+    if (Probe __PORT__) { $ready = $true; W "portal port answered on attempt $i"; break }
+    if ($i % 10 -eq 0) { W "probe attempt $i: port __PORT__ not answering yet" }
+    Start-Sleep -Seconds 2
 }
-if (-not $ready) { W "portal still not answering after 45 attempts - opening anyway as a signal" }
+if (-not $ready) { W "portal port still closed after 60 attempts - opening browser anyway as a signal" }
 if (-not $NoPortal) {
     __PORTAL__
     W "portal open command issued (ready=$ready)"
 } else { W "NoPortal - skipping browser open" }
 '@
-$open = $open -replace '__APP__', $AppExe -replace '__PORTAL__', $PortalLine -replace '__ENV_URLS__', $EnvUrls -replace '__PROBE__', $PortalUrl
+$open = $open -replace '__APP__', $AppExe -replace '__PORTAL__', $PortalLine -replace '__ENV_URLS__', $EnvUrls -replace '__PORT__', $HttpPort
 Set-Content "$InstallDir\open-illumina.ps1" $open
 
 $restart = @'
 $log = Join-Path $env:TEMP "Illumina-restart.log"
 function W($m) { Add-Content -Path $log -Value ("{0:yyyy-MM-dd HH:mm:ss} {1}" -f (Get-Date), $m) -ErrorAction SilentlyContinue }
+function Probe([int]$port) {
+    $c = $null
+    try { $c = New-Object System.Net.Sockets.TcpClient; $c.Connect('127.0.0.1', $port); return $true }
+    catch { return $false }
+    finally { if ($c) { $c.Close() } }
+}
 W "restart requested by $env:USERNAME"
 Get-Process -Name Illumina -ErrorAction SilentlyContinue | Stop-Process -Force
 Get-Process -Name chrome   -ErrorAction SilentlyContinue | Stop-Process -Force
@@ -307,38 +316,29 @@ $app = "__APP__"
 Start-Process $app -WorkingDirectory (Split-Path $app) -WindowStyle Hidden
 W "started Illumina.exe (hidden)"
 $ready = $false
-for ($i = 1; $i -le 45; $i++) {
-    try { Invoke-WebRequest -Uri "__PROBE__" -UseBasicParsing -TimeoutSec 2 | Out-Null; $ready = $true; W "portal answered on attempt $i"; break }
-    catch { Start-Sleep -Seconds 2 }
+for ($i = 1; $i -le 60; $i++) {
+    if (Probe __PORT__) { $ready = $true; W "portal port answered on attempt $i"; break }
+    if ($i % 10 -eq 0) { W "probe attempt $i: port __PORT__ not answering yet" }
+    Start-Sleep -Seconds 2
 }
 # A human clicked this button, so the portal ALWAYS opens - readiness first
-# when possible, and after a long failure the error page is itself the signal.
+# when possible; after a long failure the error page is itself the signal.
 __PORTAL__
 W "portal open command issued (ready=$ready)"
 '@
-$restart = $restart -replace '__APP__', $AppExe -replace '__PORTAL__', $PortalLine -replace '__ENV_URLS__', $EnvUrls -replace '__PROBE__', $PortalUrl
+$restart = $restart -replace '__APP__', $AppExe -replace '__PORTAL__', $PortalLine -replace '__ENV_URLS__', $EnvUrls -replace '__PORT__', $HttpPort
 Set-Content "$InstallDir\restart-illumina.ps1" $restart
 
-$Wsh = New-Object -ComObject WScript.Shell
-# Per-user locations for the KIOSK account ($HumanUser), not the public/
-# all-users ones: the icons and the logon autostart belong to the account
-# that actually runs the service. A church admin logging in for maintenance
-# then gets a clean session with no walls spawning, and on a dev laptop the
-# two accounts never start each other's instances.
+$Wsh     = New-Object -ComObject WScript.Shell
 if ($HumanUser -eq $env:USERNAME) {
-    # Respect OneDrive Known-Folder redirection for the current user.
     $UserDesktop = [Environment]::GetFolderPath("Desktop")
     $UserStartup = [Environment]::GetFolderPath("Startup")
 } else {
-    # Target account's profile - may not exist yet (avauser's first logon is
-    # still to come); Windows adopts a pre-created profile folder at logon.
     $UserDesktop = "C:\Users\$HumanUser\Desktop"
     $UserStartup = "C:\Users\$HumanUser\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup"
     New-Item -ItemType Directory -Path $UserDesktop -Force | Out-Null
     New-Item -ItemType Directory -Path $UserStartup -Force | Out-Null
 }
-# Retire any shortcuts left in the public/all-users locations by older
-# installer versions, so there is exactly ONE set, in the right place.
 $CommonDesktop = [Environment]::GetFolderPath("CommonDesktopDirectory")
 $CommonStartup = [Environment]::GetFolderPath("CommonStartup")
 Get-ChildItem $CommonStartup -Filter "Illumina*.lnk"         -ErrorAction SilentlyContinue | Remove-Item -Force
@@ -349,21 +349,27 @@ Get-ChildItem $UserDesktop  -Filter "Illumina*.lnk"         -ErrorAction Silentl
 Get-ChildItem $UserDesktop  -Filter "Restart Illumina*.lnk" -ErrorAction SilentlyContinue | Remove-Item -Force
 $PsExe = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
 
+# WindowStyle 7 (minimized) on the shortcut itself is belt-and-braces with
+# -WindowStyle Hidden in the arguments: even if a console ever flashes,
+# it flashes minimized instead of sitting blank on the desktop.
 $s = $Wsh.CreateShortcut("$UserDesktop\Illumina.lnk")
 $s.TargetPath   = $PsExe
 $s.Arguments    = "-ExecutionPolicy Bypass -WindowStyle Hidden -File `"$InstallDir\open-illumina.ps1`""
 $s.IconLocation = $(if ($ChromeExe) { "$ChromeExe,0" } else { "shell32.dll,14" })
+$s.WindowStyle  = 7
 $s.Save()
 
 $r = $Wsh.CreateShortcut("$UserDesktop\Restart Illumina (if misbehaving).lnk")
 $r.TargetPath   = $PsExe
 $r.Arguments    = "-ExecutionPolicy Bypass -WindowStyle Hidden -File `"$InstallDir\restart-illumina.ps1`""
 $r.IconLocation = "shell32.dll,238"
+$r.WindowStyle  = 7
 $r.Save()
 
 $a = $Wsh.CreateShortcut("$UserStartup\Illumina Startup.lnk")
 $a.TargetPath = $PsExe
 $a.Arguments  = "-ExecutionPolicy Bypass -WindowStyle Hidden -File `"$InstallDir\open-illumina.ps1`" -DelaySeconds $LogonDelaySeconds" + $(if ($portalAtLogon) { "" } else { " -NoPortal" })
+$a.WindowStyle = 7
 $a.Save()
 Log "Shortcuts + logon autostart installed for $HumanUser only."
 
