@@ -330,12 +330,14 @@ if ($syncOn) {
 $obj | ConvertTo-Json -Depth 10 | Set-Content $overridesPath
 
 # ---------------- [7/8] Helpers + shortcuts ---------------------------------
-$portalAtLogon = ($useAvaUser -and $AutoOpenPortalAtLogon) -or (-not $useAvaUser -and $autoOnNow -and $AutoOpenPortalAtLogon -and ($want -match '^[yY]'))
-# Simpler and truer: the portal auto-opens at logon whenever this install
-# configured auto sign-in (kiosk boots straight into the service); a manual
-# logon machine stays quiet and uses the desktop icon.
-$portalAtLogon = $autoOnNow -or ($useAvaUser) -or ($want -match '^[yY]')
-if (-not $useAvaUser -and -not ($want -match '^[yY]')) { $portalAtLogon = $false }
+# The portal auto-opens at logon whenever this install configured auto
+# sign-in (kiosk boots straight into the service). A manual logon machine
+# stays quiet and uses the desktop icon.
+if ($useAvaUser) {
+    $portalAtLogon = $true
+} else {
+    $portalAtLogon = ($want -match '^[yY]')
+}
 Log $(if ($portalAtLogon) { "Logon behavior: app + portal open automatically (true kiosk boot)." }
       else { "Logon behavior: app starts silently at logon; open the portal with the desktop icon." })
 
@@ -426,7 +428,7 @@ $a = $Wsh.CreateShortcut("$UserStartup\Illumina Startup.lnk")
 $a.TargetPath = $PsExe
 $a.Arguments  = "-ExecutionPolicy Bypass -WindowStyle Hidden -File `"$InstallDir\open-illumina.ps1`" -DelaySeconds $LogonDelaySeconds" + $(if ($portalAtLogon) { "" } else { " -NoPortal" })
 $a.Save()
-Log "Shortcuts placed for $HumanUser: 'Illumina' (everyday) and 'Restart Illumina' (emergency)."
+Log "Shortcuts placed for '$HumanUser' - 'Illumina' (everyday) and 'Restart Illumina' (emergency)."
 
 # ---------------- [8/8] Network, power, summary -----------------------------
 Log "[8/8] Opening the network doors and keeping the PC awake..."
