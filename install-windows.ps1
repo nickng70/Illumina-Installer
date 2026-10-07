@@ -1,22 +1,12 @@
-#Requires -RunAsAdministrator
 <#
-    Illumina AVA PC Installer - Windows 10/11 (v7.0 FINAL)
-    - Detects whether the logged-in user is an administrator and guides the
-      operator to the safest kiosk account for THIS machine:
-        * admin logged in   -> offers a dedicated standard 'avauser'
-                               (auto sign-in enabled silently, by design)
-        * standard logged in-> uses that account (ideal kiosk duty)
-        * declining avauser -> proceeds with a clear, honest NOTICE
-    - Auto sign-in is asked only for current-user installs; ENTER = No and
-      any stale configuration is cleared, so the state is always known
-    - Bible/Hymn data: ACL-locked to kiosk account + administrators AND
-      marked System+Hidden, so Explorer hides it behind a scary warning
+    Illumina AVA PC Installer - Windows 10/11 (v7.1 FINAL)
+    - Friendly administrator check (reassures nothing was changed)
+    - Surgical process handling (leaves personal Chrome alone)
+    - Clean [1]/[2] menu for account selection with smart Standard-user detection
+    - Auto sign-in activates at the next restart; no reboot is demanded
+    - Content folders are permission-locked and hidden quietly (security-by-obscurity)
+    - Minimal helpers: everyday icon starts the app; Restart icon relaunches
     - HTTPS via a private 100-year certificate in the machine store
-      (Kestrel reads it from the store through appsettings.json - the
-      legacy file-based pfx override is removed from old installs)
-    - Site survey (Right Wall / Streaming / Drive sync), ENTER = No
-    - Minimal helpers: start the exe if needed, wait, open the portal in
-      its own --app window; per-user shortcuts + logon autostart
 #>
 $ErrorActionPreference = "Stop"
 
@@ -35,16 +25,30 @@ $AutoOpenPortalAtLogon = $true
 
 function Log($m) { Write-Host "`n==> $m" -ForegroundColor Green }
 
+# ---------------- [0/8] Administrator check ---------------------------------
+$identity  = [Security.Principal.WindowsIdentity]::GetCurrent()
+$principal = New-Object Security.Principal.WindowsPrincipal($identity)
+if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    Write-Host ""
+    Write-Host "  Illumina setup needs administrator rights for this one run - it installs" -ForegroundColor Yellow
+    Write-Host "  program files and opens a network port, which Windows only allows an" -ForegroundColor Yellow
+    Write-Host "  elevated session to do." -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "  Please close this window, open PowerShell again with" -ForegroundColor Yellow
+    Write-Host "  right-click > 'Run as administrator', and paste the same command." -ForegroundColor Yellow
+    Write-Host "  Nothing on this PC has been changed yet." -ForegroundColor Yellow
+    exit 1
+}
+
 Write-Host "==================================================" -ForegroundColor Cyan
-Write-Host "   Illumina AVA PC Installer - Windows (v7.0)     " -ForegroundColor Cyan
+Write-Host "   Illumina AVA PC Installer - Windows (v7.1)     " -ForegroundColor Cyan
 Write-Host "   Guided setup for a safe, self-starting kiosk   " -ForegroundColor Cyan
 Write-Host "==================================================" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "  Welcome! This installer prepares this PC to run Illumina around the"
-Write-Host "  clock: it fetches the latest release, protects the Bible and Hymn"
-Write-Host "  library, configures HTTPS, and tailors the displays to your hardware."
-Write-Host "  Every question below explains itself, and pressing ENTER always"
-Write-Host "  accepts the safe, recommended default."
+Write-Host "  clock: it fetches the latest release, configures secure local HTTPS,"
+Write-Host "  and tailors the displays to your hardware. Every question explains"
+Write-Host "  itself, and pressing ENTER always accepts the safe, recommended default."
 
 # ---------------- [1/8] GitHub token ----------------------------------------
 Log "[1/8] Release access token..."
@@ -72,43 +76,50 @@ $Zip = Join-Path $env:TEMP $AssetName
 Invoke-WebRequest -Uri $Asset.url -Headers @{ Authorization = "Bearer $Token"; Accept = "application/octet-stream" } -OutFile $Zip
 Log "Release $($Release.tag_name) downloaded."
 
-# ---------------- [3/8] Stop running instances ------------------------------
+# ---------------- [3/8] Pause previous session ------------------------------
 Log "[3/8] Pausing any running Illumina session..."
 Get-Process -Name Illumina -ErrorAction SilentlyContinue | Stop-Process -Force
-Get-Process -Name chrome   -ErrorAction SilentlyContinue | Stop-Process -Force
+# Only Chrome windows that belong to Illumina's own kiosk profiles - never
+# the operator's personal browser tabs.
+Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" -ErrorAction SilentlyContinue |
+    Where-Object { $_.CommandLine -like '*IlluminaKiosk*' } |
+    ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 Start-Sleep -Seconds 2
 Get-ChildItem "C:\Users\*\AppData\Local\Temp\IlluminaKiosk" -Directory -ErrorAction SilentlyContinue |
     Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
-Log "Previous session closed cleanly; your Bible/Hymn data is untouched."
+Log "Previous session paused - your open browser tabs and files are untouched."
 
 # ---------------- [4/8] Kiosk account & sign-in -----------------------------
 Log "[4/8] Choosing the kiosk account and sign-in behavior..."
 Write-Host ""
-Write-Host "  Illumina is designed to run all day, every day, unattended. For that"
-Write-Host "  life, the account it runs under should be a STANDARD (non-administrator)"
-Write-Host "  account: standard accounts cannot delete the app, change its permissions,"
-Write-Host "  or install system-wide software - exactly the protection a church AVA PC"
-Write-Host "  wants, while still letting Illumina read what it needs to display."
 
-# Who is actually logged on at this desktop? (The installer itself runs
-# elevated, so we must NOT trust our own token for this question.)
 $interactiveUser = $env:USERNAME
 try {
     $csUser = (Get-CimInstance Win32_ComputerSystem).UserName
     if ($csUser) { $interactiveUser = ($csUser -split '\\')[-1] }
 } catch { }
-$adminNames = @(Get-LocalGroupMember -Group "Administrators" -ErrorAction SilentlyContinue |
-                ForEach-Object { ($_.Name -split '\\')[-1] })
+$adminNames = @(Get-LocalGroupMember -Group "Administrators" -ErrorAction SilentlyContinue | ForEach-Object { ($_.Name -split '\\')[-1] })
 $currentUserIsAdmin = ($adminNames -contains $interactiveUser)
+
+Write-Host "  How will this PC be used?"
+Write-Host "  [1] Dedicated Church AVA PC (Recommended)"
+Write-Host "      Creates a clean, standard-user account named 'avauser' just for Illumina."
+Write-Host "      This keeps the desktop uncluttered and prevents accidental system changes."
+Write-Host "  [2] Personal Laptop or IT Testing"
+Write-Host "      Uses your current Windows account ($interactiveUser)."
+Write-Host "      Ideal for development, testing, or initial setup by an administrator."
+if (-not $currentUserIsAdmin) {
+    Write-Host ""
+    Write-Host "  (Note: Your current account is already a Standard user, which is perfectly safe for Option 2!)" -ForegroundColor Cyan
+}
+$mode = Read-Host "`n  Select setup type (press ENTER for 1)"
+$useAvaUser = ($mode -ne '2')
 
 $Winlogon = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon"
 $wl       = Get-ItemProperty $Winlogon -ErrorAction SilentlyContinue
 $autoOnNow   = ($wl.AutoAdminLogon -eq "1")
 $autoUserNow = $wl.DefaultUserName
 
-# Any time we STORE a new password (registry auto-login and/or a new kiosk
-# account), confirm it twice: a silent typo here means a kiosk PC that
-# auto-logs into a logon screen, or an account whose password nobody knows.
 function Read-NewPassword([string]$what) {
     $p1 = Read-Host $what
     if (-not $p1) { return $null }
@@ -128,29 +139,11 @@ function Clear-AutoLogin {
     Set-ItemProperty $Winlogon "DefaultPassword" ""  -Type String
 }
 
-$useAvaUser = $false
-if ($currentUserIsAdmin) {
-    Write-Host ""
-    Write-Host "  This PC's logged-in account ('$interactiveUser') HAS administrator rights."
-    Write-Host "  Running a kiosk as an administrator would let anyone at this PC delete"
-    Write-Host "  or modify Illumina without any password prompt, so we recommend a"
-    Write-Host "  dedicated standard kiosk account named 'avauser' instead."
-    $makeAva = Read-Host "  Create the dedicated standard kiosk account 'avauser' (recommended)? [Y/n] (ENTER = Yes)"
-    $useAvaUser = ($makeAva -notmatch '^[nN]')
-}
-else {
-    Write-Host ""
-    Write-Host "  This PC's logged-in account ('$interactiveUser') is already a STANDARD user -"
-    Write-Host "  ideal for kiosk duty, so no extra account is needed."
-    Write-Host "  Good to know: future updates and system-level maintenance will ask for"
-    Write-Host "  an administrator password. That prompt is the protection working as intended."
-}
+$autoLoginOn = $false
 
 if ($useAvaUser) {
     $HumanUser = "avauser"
     $existing  = Get-LocalUser -Name $HumanUser -ErrorAction SilentlyContinue
-    # Reuse the stored auto-login password ONLY when it already belongs to
-    # avauser - never inherit a password left behind by another account.
     $reusable = $autoOnNow -and ($autoUserNow -eq $HumanUser) -and $wl.DefaultPassword
     if ($reusable) {
         $PlainPass = $wl.DefaultPassword
@@ -167,42 +160,43 @@ if ($useAvaUser) {
         Set-LocalUser -Name $HumanUser -Password $Sec -PasswordNeverExpires $true
         Log "Refreshed the existing kiosk account 'avauser'."
     }
-    $isAdmin = Get-LocalGroupMember -Group "Administrators" -Member $HumanUser -ErrorAction SilentlyContinue
-    if ($isAdmin) {
+    $isAdminGrp = Get-LocalGroupMember -Group "Administrators" -Member $HumanUser -ErrorAction SilentlyContinue
+    if ($isAdminGrp) {
         Remove-LocalGroupMember -Group "Administrators" -Member $HumanUser
         Log "Confirmed 'avauser' is a standard user (kiosk accounts must not be admins)."
-    } else { Log "Confirmed 'avauser' is a standard user (kiosk accounts must not be admins)." }
+    } else { Log "Confirmed 'avauser' is a standard user." }
     Set-AutoLogin $HumanUser $PlainPass
-    Log "Auto sign-in enabled for avauser - after a reboot this PC boots straight into Illumina."
+    $autoLoginOn = $true
+    Log "Auto sign-in configured for avauser - it activates at the next restart."
 }
 else {
     $HumanUser = $interactiveUser
     if ($currentUserIsAdmin) {
         Write-Host ""
-        Write-Host "  NOTICE: continuing with an ADMINISTRATOR kiosk account ('$HumanUser')." -ForegroundColor Yellow
-        Write-Host "  Anyone using this PC can delete or modify Illumina, change firewall"
-        Write-Host "  rules, and install software without a password prompt. Your Bible and"
-        Write-Host "  Hymn files stay hidden and locked, but the machine itself is open."
-        Write-Host "  Supported for testing and special cases; not recommended for churches."
+        Write-Host "  NOTICE: continuing with an ADMINISTRATOR account ('$HumanUser')." -ForegroundColor Yellow
+        Write-Host "  Anyone using this PC can delete or modify Illumina, change firewall rules,"
+        Write-Host "  and install software without a password prompt. Supported for testing and"
+        Write-Host "  special cases; not recommended for a church deployment."
     }
     Write-Host ""
-    Write-Host "  Auto sign-in lets the PC boot straight into Illumina after a power cut -"
-    Write-Host "  no volunteer needs to type a password on Sunday morning. On a personal"
-    Write-Host "  laptop you may prefer the normal logon screen instead."
+    Write-Host "  Auto sign-in lets the PC boot straight into Illumina after a power cut - no"
+    Write-Host "  volunteer needs to type a password on Sunday morning. On a personal laptop"
+    Write-Host "  you may prefer the normal logon screen instead."
     if ($autoOnNow) { Write-Host "  (Auto sign-in is currently enabled for '$autoUserNow'.)" }
     $want = Read-Host "  Enable auto sign-in for $HumanUser on this PC? [y/N] (ENTER = No; any existing auto sign-in is then turned off)"
     if ($want -match '^[yY]') {
         $PlainPass = Read-NewPassword "  Windows password for $HumanUser, stored for auto sign-in (must be exact)"
         Set-AutoLogin $HumanUser $PlainPass
-        Log "Auto sign-in enabled for $HumanUser."
+        $autoLoginOn = $true
+        Log "Auto sign-in enabled for $HumanUser - it activates at the next restart."
     } else {
         Clear-AutoLogin
-        Log "Auto sign-in left OFF (and any previous configuration cleared) - the PC will show its normal logon screen."
+        Log "Auto sign-in left OFF (and any previous configuration cleared) - the PC keeps its normal logon screen."
     }
 }
 
-# ---------------- [5/8] App files + data protection -------------------------
-Log "[5/8] Installing Illumina and protecting its library..."
+# ---------------- [5/8] App files + content folders -------------------------
+Log "[5/8] Installing Illumina and preparing its content folders..."
 $Backup = $null
 if (Test-Path "$InstallDir\Data") { $Backup = Join-Path $env:TEMP "illumina-data-backup"; Move-Item "$InstallDir\Data" $Backup -Force }
 if (Test-Path $InstallDir) { Remove-Item $InstallDir -Recurse -Force }
@@ -215,21 +209,16 @@ if ($Backup) {
 }
 New-Item -ItemType Directory -Path "$InstallDir\Data" -Force | Out-Null
 
-# Working folders the app writes at runtime (Program Files is write-protected
-# for standard accounts, so the kiosk account gets explicit Modify here).
 foreach ($w in @("SlideContent", "MediaContent", "AppData", "Recordings")) {
     $p = Join-Path $InstallDir $w
     New-Item -ItemType Directory -Path $p -Force | Out-Null
     icacls $p /grant "${HumanUser}:(OI)(CI)M" | Out-Null
 }
-# Library lockdown: readable by the kiosk account and administrators only...
+# Content folders: readable by the kiosk account and administrators only, and
+# marked as protected system files so they stay out of everyday view.
 icacls "$InstallDir\Data" /inheritance:r /grant:r "SYSTEM:(OI)(CI)F" "Administrators:(OI)(CI)F" "${HumanUser}:(OI)(CI)RX" | Out-Null
-# ...and marked as protected system files, so Explorer hides the folder
-# behind the 'these files are required to run Windows' warning by default.
 attrib +s +h "$InstallDir\Data" | Out-Null
-Write-Host "  The Bible and Hymn library is now (a) readable only by the kiosk account"
-Write-Host "  and administrators, and (b) hidden from casual browsing - Explorer shows"
-Write-Host "  it only if someone deliberately reveals protected operating-system files."
+Log "Content folders prepared with this machine's recommended permissions."
 Set-Content "$MachineDir\current-version" $Release.tag_name
 
 # ---------------- [6/8] Survey + certificate + machine config ---------------
@@ -246,7 +235,6 @@ $streamOn    = ($streaming -match '^[yY]')
 $syncOn      = ($sync -match '^[yY]')
 Log "Survey recorded - Right Wall: $rightWallOn | Streaming: $streamOn | Drive sync: $syncOn"
 
-# ---- Google Drive key + folder IDs (only when sync was requested) ----
 $keyJson  = "$MachineDir\key.json"
 $prayerId = ""; $annId = ""
 if ($syncOn) {
@@ -273,11 +261,10 @@ if ($syncOn) {
     } else { $syncOn = $false; Log "No Drive key available, so Drive sync stays OFF on this machine." }
 }
 
-# ---- Private, machine-trusted HTTPS certificate (store-based) ----
 Write-Host ""
-Write-Host "  Illumina serves its portal over HTTPS on this PC only. We create a"
-Write-Host "  private 100-year certificate and trust it machine-wide, so browsers"
-Write-Host "  show a clean padlock with no warnings - no internet certificate needed."
+Write-Host "  Illumina serves its portal over HTTPS on this PC only. We create a private"
+Write-Host "  100-year certificate and trust it machine-wide, so browsers show a clean"
+Write-Host "  padlock with no warnings - no internet certificate needed."
 $cert = Get-ChildItem Cert:\LocalMachine\My -ErrorAction SilentlyContinue |
         Where-Object { $_.FriendlyName -eq "Illumina Kiosk HTTPS" -and $_.NotAfter -gt (Get-Date).AddMonths(1) } |
         Select-Object -First 1
@@ -289,14 +276,10 @@ if (-not $cert) {
     Log "Certificate created and trusted for this machine."
 } else { Log "Reusing this machine's existing HTTPS certificate." }
 
-# ---- Stamp machine truth into the overrides layer (merge, never clobber) ----
 $overridesPath = "$InstallDir\AppData\AppSettingsOverrides.json"
 if (Test-Path $overridesPath) { $obj = Get-Content $overridesPath -Raw | ConvertFrom-Json }
 else { $obj = [PSCustomObject]@{} }
 
-# Retire the legacy file-based certificate override from older installs:
-# Kestrel now reads the certificate from the Windows store (appsettings.json),
-# and a stale pfx path here could confuse it on config reloads.
 if ($obj.PSObject.Properties.Name -contains "Kestrel") {
     $obj.PSObject.Properties.Remove("Kestrel")
     Log "Removed an outdated certificate override from a previous install."
@@ -330,16 +313,9 @@ if ($syncOn) {
 $obj | ConvertTo-Json -Depth 10 | Set-Content $overridesPath
 
 # ---------------- [7/8] Helpers + shortcuts ---------------------------------
-# The portal auto-opens at logon whenever this install configured auto
-# sign-in (kiosk boots straight into the service). A manual logon machine
-# stays quiet and uses the desktop icon.
-if ($useAvaUser) {
-    $portalAtLogon = $true
-} else {
-    $portalAtLogon = ($want -match '^[yY]')
-}
+$portalAtLogon = $autoLoginOn -and $AutoOpenPortalAtLogon
 Log $(if ($portalAtLogon) { "Logon behavior: app + portal open automatically (true kiosk boot)." }
-      else { "Logon behavior: app starts silently at logon; open the portal with the desktop icon." })
+      else { "Logon behavior: app starts silently at logon; the desktop icon opens the portal." })
 
 function Resolve-Chrome {
     foreach ($c in @("C:\Program Files\Google\Chrome\Application\chrome.exe",
@@ -351,19 +327,12 @@ function Resolve-Chrome {
 }
 $ChromeExe = Resolve-Chrome
 if (-not $ChromeExe) { Write-Warning "Chrome not found - the portal will open in the default browser." }
-# Use --new-window to get the " - Google Chrome" title suffix that the 
-# positioner relies on, but use a unique --user-data-dir so it never gets 
-# swallowed as a tab by your personal Chrome.
-$PortalLine = if ($ChromeExe) { 
-    "Start-Process '$ChromeExe' -ArgumentList '--new-window', '--user-data-dir=$env:TEMP\IlluminaPortal', '$PortalUrl'" 
-} else { 
-    "Start-Process '$PortalUrl'" 
-}
-
+$PortalLine = if ($ChromeExe) { "Start-Process '$ChromeExe' -ArgumentList '--app=$PortalUrl'" } else { "Start-Process '$PortalUrl'" }
 
 Log "[7/8] Writing the everyday shortcuts..."
 $AppExe = "$InstallDir\Illumina.exe"
 
+# Everyday icon: start the app if it isn't running, then open the portal.
 $open = @'
 param([int]$DelaySeconds = 0, [switch]$NoPortal)
 if ($DelaySeconds -gt 0) { Start-Sleep -Seconds $DelaySeconds }
@@ -377,9 +346,12 @@ if (-not $NoPortal) { __PORTAL__ }
 $open = $open -replace '__APP__', $AppExe -replace '__PORTAL__', $PortalLine
 Set-Content "$InstallDir\open-illumina.ps1" $open
 
+# Restart icon: tears down and relaunches Illumina + kiosk Chrome only.
 $restart = @'
 Get-Process -Name Illumina -ErrorAction SilentlyContinue | Stop-Process -Force
-Get-Process -Name chrome   -ErrorAction SilentlyContinue | Stop-Process -Force
+Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" -ErrorAction SilentlyContinue |
+    Where-Object { $_.CommandLine -like '*IlluminaKiosk*' } |
+    ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 Start-Sleep -Seconds 2
 Remove-Item -Recurse -Force "$env:TEMP\IlluminaKiosk" -ErrorAction SilentlyContinue
 $app = "__APP__"
@@ -390,8 +362,6 @@ __PORTAL__
 $restart = $restart -replace '__APP__', $AppExe -replace '__PORTAL__', $PortalLine
 Set-Content "$InstallDir\restart-illumina.ps1" $restart
 
-# Shortcuts live in the KIOSK account's own profile: maintenance logins by
-# other accounts stay clean, and two accounts never start each other's runs.
 if ($HumanUser -eq $env:USERNAME) {
     $UserDesktop = [Environment]::GetFolderPath("Desktop")
     $UserStartup = [Environment]::GetFolderPath("Startup")
@@ -434,7 +404,7 @@ $a = $Wsh.CreateShortcut("$UserStartup\Illumina Startup.lnk")
 $a.TargetPath = $PsExe
 $a.Arguments  = "-ExecutionPolicy Bypass -WindowStyle Hidden -File `"$InstallDir\open-illumina.ps1`" -DelaySeconds $LogonDelaySeconds" + $(if ($portalAtLogon) { "" } else { " -NoPortal" })
 $a.Save()
-Log "Shortcuts placed for '$HumanUser' - 'Illumina' (everyday) and 'Restart Illumina' (emergency)."
+Log "Shortcuts placed for $HumanUser - 'Illumina' (everyday) and 'Restart Illumina' (recovery)."
 
 # ---------------- [8/8] Network, power, summary -----------------------------
 Log "[8/8] Opening the network doors and keeping the PC awake..."
@@ -450,14 +420,22 @@ Write-Host ""
 Write-Host "==================================================" -ForegroundColor Cyan
 Write-Host "   Setup complete - Illumina $($Release.tag_name) is ready!" -ForegroundColor Green
 Write-Host "==================================================" -ForegroundColor Cyan
-Write-Host "   Kiosk account : $HumanUser$(if ($useAvaUser) { ' (dedicated standard account)' } else { ' (this PC''s logged-in account)' })"
-Write-Host "   Auto sign-in  : $(if ($autoOnNow -or ($want -match '^[yY]') -or $useAvaUser) { 'ON - boots straight into Illumina after reboot' } else { 'OFF - normal logon screen' })"
+Write-Host "   Kiosk account : $HumanUser$(if ($useAvaUser) { ' (dedicated standard account)' } else { ' (this PC''s existing account)' })"
+Write-Host "   Auto sign-in  : $(if ($autoLoginOn) { 'configured' } else { 'off - normal logon screen' })"
 Write-Host "   Right Wall    : $rightWallOn   Streaming: $streamOn   Drive sync: $syncOn"
 Write-Host "   Portal        : $PortalUrl  (desktop icon 'Illumina' opens it any time)"
-Write-Host "   Library       : hidden + locked at $InstallDir\Data"
 Write-Host ""
-Write-Host "   Remember: auto sign-in and the new shortcuts take effect at the NEXT"
-Write-Host "   reboot. When in doubt later, the desktop icon 'Restart Illumina'"
-Write-Host "   always brings every display back to life."
-$ans = Read-Host "Reboot now to finish? [y/N] (ENTER = No - reboot when convenient)"
-if ($ans -match '^[yY]') { Restart-Computer }
+if ($autoLoginOn) {
+    Write-Host "   Auto sign-in takes effect the next time this PC restarts - for example"
+    Write-Host "   after a power cut or your next planned reboot. There is nothing you need"
+    Write-Host "   to do right now: the desktop icon 'Illumina' starts everything immediately"
+    Write-Host "   in this session, and from the next restart onward the PC will boot"
+    Write-Host "   straight into Illumina on its own."
+    $ans = Read-Host "Would you like to restart now to see auto sign-in in action? [y/N] (ENTER = No)"
+    if ($ans -match '^[yY]') { Restart-Computer }
+} else {
+    Write-Host "   No restart is needed - everything is live already. The desktop icon"
+    Write-Host "   'Illumina' starts the app and opens the portal any time, and the"
+    Write-Host "   'Restart Illumina' icon is the one-click recovery if a display ever"
+    Write-Host "   misbehaves."
+}
