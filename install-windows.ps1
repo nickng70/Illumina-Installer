@@ -351,9 +351,15 @@ function Resolve-Chrome {
 }
 $ChromeExe = Resolve-Chrome
 if (-not $ChromeExe) { Write-Warning "Chrome not found - the portal will open in the default browser." }
-# --app= gives the portal its own dedicated window (never swallowed as a tab
-# by a personal Chrome), with a clean title the positioner can recognize.
-$PortalLine = if ($ChromeExe) { "Start-Process '$ChromeExe' -ArgumentList '--app=$PortalUrl'" } else { "Start-Process '$PortalUrl'" }
+# Use --new-window to get the " - Google Chrome" title suffix that the 
+# positioner relies on, but use a unique --user-data-dir so it never gets 
+# swallowed as a tab by your personal Chrome.
+$PortalLine = if ($ChromeExe) { 
+    "Start-Process '$ChromeExe' -ArgumentList '--new-window', '--user-data-dir=$env:TEMP\IlluminaPortal', '$PortalUrl'" 
+} else { 
+    "Start-Process '$PortalUrl'" 
+}
+
 
 Log "[7/8] Writing the everyday shortcuts..."
 $AppExe = "$InstallDir\Illumina.exe"
