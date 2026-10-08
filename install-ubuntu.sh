@@ -1,242 +1,382 @@
-#!/usr/bin/env bash
-# ============================================================================
-#  Illumina AVA PC Installer - Ubuntu Desktop 24.04/26.04 LTS
-#  Hosted PUBLICLY in nickng70/Illumina-Installer (contains NO secrets).
-#  Downloads the self-contained app from the PRIVATE nickng70/Illumina-Releases
-#  repo using a read-only token entered at runtime.
-#  Run with:  sudo bash install-ubuntu.sh
-# ============================================================================
-set -euo pipefail
-
-# ----------------------------- CONFIG ---------------------------------------
-GITHUB_OWNER="nickng70"
-GITHUB_REPO="Illumina-Releases"      # PRIVATE repo holding release assets
-ASSET_NAME="illumina-linux-x64.tar.gz"
-APP_DIR="/var/www/illumina"
-HUMAN_USER="avauser"                 # kiosk/operator account (auto-login)
-SVC_USER="illumina"                  # app service account (owns Data)
-HTTP_PORT="5152"
-DOTNET_ROOT="/usr/share/dotnet"
-TOKEN_FILE="/etc/illumina/github-token"
-# ----------------------------------------------------------------------------
-
-log()  { echo -e "\n\033[1;32m==>\033[0m $*"; }
-die()  { echo -e "\n\033[1;31mERROR:\033[0m $*" >&2; exit 1; }
-
-echo "=================================================="
-echo "   Illumina AVA PC Installer (Ubuntu)             "
-echo "=================================================="
-
-[[ $EUID -eq 0 ]] || exec sudo bash "$0" "$@"
-
-log "[1/10] Prerequisites..."
-apt-get update -y >/dev/null
-apt-get install -y curl jq tar >/dev/null
-
-# ---------------- GitHub token (stored root-only for future updates) --------
-mkdir -p /etc/illumina && chmod 700 /etc/illumina
-if [[ -z "${GITHUB_TOKEN:-}" ]]; then
-  if [[ -s "$TOKEN_FILE" ]]; then
-    GITHUB_TOKEN="$(cat "$TOKEN_FILE")"
-    log "Reusing stored GitHub token from $TOKEN_FILE"
-  else
-    read -rsp "Enter GitHub read-only token for $GITHUB_REPO: " GITHUB_TOKEN; echo
-    [[ -n "$GITHUB_TOKEN" ]] || die "No token provided."
-    printf '%s' "$GITHUB_TOKEN" > "$TOKEN_FILE"; chmod 600 "$TOKEN_FILE"
-  fi
-fi
-
-# ---------------- Locate latest release asset -------------------------------
-log "[2/10] Locating latest release in $GITHUB_OWNER/$GITHUB_REPO..."
-API_JSON=$(curl -fsSL -H "Authorization: Bearer $GITHUB_TOKEN" \
-             -H "Accept: application/vnd.github+json" \
-             "https://api.github.com/repos/$GITHUB_OWNER/$GITHUB_REPO/releases/latest") \
-  || die "GitHub API call failed - check the token has Contents:Read on $GITHUB_REPO."
-ASSET_URL=$(echo "$API_JSON" | jq -r --arg n "$ASSET_NAME" '.assets[] | select(.name==$n) | .url' | head -n1)
-RELEASE_TAG=$(echo "$API_JSON" | jq -r '.tag_name')
-[[ -n "$ASSET_URL" && "$ASSET_URL" != "null" ]] || die "Asset '$ASSET_NAME' not found in latest release ($RELEASE_TAG)."
-
-log "Downloading $ASSET_NAME ($RELEASE_TAG)..."
-curl -fsSL -H "Authorization: Bearer $GITHUB_TOKEN" \
-     -H "Accept: application/octet-stream" -o "/tmp/$ASSET_NAME" "$ASSET_URL"
-
-# ---------------- Human kiosk account: avauser ------------------------------
-log "[3/10] Configuring kiosk account '$HUMAN_USER'..."
-if ! id -u "$HUMAN_USER" >/dev/null 2>&1; then
-  adduser --disabled-password --gecos "AVA Kiosk" "$HUMAN_USER"
-fi
-usermod -aG sudo "$HUMAN_USER"
-read -rsp "Set/refresh the SECRET admin password for $HUMAN_USER: " AVA_PASS; echo
-[[ -n "$AVA_PASS" ]] || die "Password cannot be empty (sudo su depends on it)."
-echo "$HUMAN_USER:$AVA_PASS" | chpasswd
-
-# GDM automatic login (boots straight to desktop, no password prompt)
-CONF=/etc/gdm3/custom.conf
-mkdir -p /etc/gdm3; touch "$CONF"
-set_daemon_key() {
-  local key="$1" val="$2"
-  if grep -qE "^[#[:space:]]*${key}=" "$CONF"; then
-    sed -i -E "s|^[#[:space:]]*${key}=.*|${key}=${val}|" "$CONF"
-  elif grep -qE "^\[daemon\]" "$CONF"; then
-    sed -i -E "0,/^\[daemon\]/s//\[daemon\]\n${key}=${val}/" "$CONF"
-  else
-    printf '[daemon]\n%s=%s\n' "$key" "$val" >> "$CONF"
-  fi
-}
-set_daemon_key AutomaticLoginEnable true
-set_daemon_key AutomaticLogin "$HUMAN_USER"
-
-# ---------------- App service account ---------------------------------------
-log "[4/10] Creating service account '$SVC_USER'..."
-id -u "$SVC_USER" >/dev/null 2>&1 || useradd --system --no-create-home --shell /usr/sbin/nologin "$SVC_USER"
-
-# ---------------- Install app files (preserve Data) -------------------------
-log "[5/10] Installing app to $APP_DIR..."
-mkdir -p "$APP_DIR"
-DATA_BACKUP=""
-if [[ -d "$APP_DIR/Data" ]]; then
-  DATA_BACKUP="/tmp/.illumina-data.$$"
-  mv "$APP_DIR/Data" "$DATA_BACKUP"
-fi
-tar -xzf "/tmp/$ASSET_NAME" -C "$APP_DIR"
-rm -f "/tmp/$ASSET_NAME"
-if [[ -n "$DATA_BACKUP" ]]; then
-  rm -rf "$APP_DIR/Data"; mv "$DATA_BACKUP" "$APP_DIR/Data"
-fi
-mkdir -p "$APP_DIR/Data"
-
-# Ownership lockdown:
-#   app binaries/files -> root (readable/executable by all, writable by none)
-#   Data folder        -> illumina ONLY (avauser gets Permission denied)
-chown -R root:root "$APP_DIR"
-chmod -R a+rX "$APP_DIR"
-[[ -f "$APP_DIR/Illumina" ]] && chmod 755 "$APP_DIR/Illumina"
-chown -R "$SVC_USER:$SVC_USER" "$APP_DIR/Data"
-chmod 700 "$APP_DIR/Data"
-find "$APP_DIR/Data" -type f -exec chmod 600 {} +
-# Writable home spots the service (and dev-certs) need:
-install -d -o "$SVC_USER" -g "$SVC_USER" -m 700 "$APP_DIR/.aspnet"
-
-echo "$RELEASE_TAG" > /etc/illumina/current-version
-
-# ---------------- .NET tooling + HTTPS dev certificate ----------------------
-log "[6/10] Ensuring HTTPS developer certificate for the app..."
-if [[ ! -x "$DOTNET_ROOT/dotnet" ]]; then
-  curl -sSL https://dot.net/v1/dotnet-install.sh -o /tmp/dotnet-install.sh
-  bash /tmp/dotnet-install.sh --channel 10.0 --install-dir "$DOTNET_ROOT" >/dev/null
-  ln -sf "$DOTNET_ROOT/dotnet" /usr/local/bin/dotnet
-fi
-sudo -u "$SVC_USER" HOME="$APP_DIR" "$DOTNET_ROOT/dotnet" dev-certs https >/dev/null 2>&1 \
-  || log "WARNING: dev-certs generation reported an issue - verify HTTPS endpoint at first run."
-
-# ---------------- systemd service -------------------------------------------
-log "[7/10] Creating systemd service..."
-cat > /etc/systemd/system/illumina.service <<EOF
-[Unit]
-Description=Illumina Web App on Kestrel (.NET 10, self-contained)
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-WorkingDirectory=$APP_DIR
-ExecStart=$APP_DIR/Illumina
-Environment=ASPNETCORE_ENVIRONMENT=Production
-Environment=ASPNETCORE_URLS=http://0.0.0.0:$HTTP_PORT
-Environment=HOME=$APP_DIR
-User=$SVC_USER
-Restart=always
-RestartSec=10
-KillSignal=SIGINT
-SyslogIdentifier=illumina
-
-[Install]
-WantedBy=multi-user.target
-EOF
-systemctl daemon-reload
-systemctl enable illumina >/dev/null
-systemctl restart illumina
-
-# ---------------- Passwordless restart shortcut -----------------------------
-log "[8/10] Creating restart shortcut (passwordless, narrowly scoped)..."
-SYSTEMCTL_BIN="$(command -v systemctl)"
-cat > /etc/sudoers.d/illumina-restart <<EOF
-$HUMAN_USER ALL=(root) NOPASSWD: $SYSTEMCTL_BIN restart illumina
-EOF
-chmod 440 /etc/sudoers.d/illumina-restart
-visudo -c -f /etc/sudoers.d/illumina-restart >/dev/null || die "sudoers file invalid!"
-
-cat > /usr/local/bin/restart-illumina.sh <<'EOF'
 #!/bin/bash
-systemctl restart illumina
+# ==============================================================================
+# Illumina AVA PC Installer - Ubuntu 22.04/24.04 (v7.1 FINAL)
+# - Friendly sudo check (reassures nothing was changed)
+# - Installs dependencies (curl, unzip, jq, openssl) silently
+# - Clean [1]/[2] menu for account selection
+# - Native Linux permissions (no "hidden folder" tricks needed)
+# - Auto sign-in via GDM3; conditional, warm reboot prompt
+# - HTTPS via a private 100-year PFX certificate (required for .NET on Linux)
+# ==============================================================================
+
+set -e
+
+# ----------------------------- [0/8] SUDO CHECK -----------------------------
+if [ "$EUID" -ne 0 ]; then
+  echo ""
+  echo "  Illumina setup needs administrator (sudo) rights for this one run - it"
+  echo "  installs program files to /opt, configures the firewall, and sets up"
+  echo "  the kiosk environment."
+  echo ""
+  echo "  Please close this terminal, open a new one, and run:"
+  echo "  sudo ./install-ubuntu.sh"
+  echo ""
+  echo "  Nothing on this PC has been changed yet."
+  exit 1
+fi
+
+# Identify the actual human user (not 'root')
+if [ -n "$SUDO_USER" ]; then
+    INTERACTIVE_USER="$SUDO_USER"
+else
+    INTERACTIVE_USER=$(logname 2>/dev/null || echo "root")
+fi
+
+if [ "$INTERACTIVE_USER" = "root" ]; then
+    echo "  Please run this script via 'sudo' while logged in as your normal user,"
+    echo "  rather than switching to the root user directly, so we can place the"
+    echo "  desktop shortcuts in the correct user profile."
+    exit 1
+fi
+
+USER_HOME=$(eval echo "~$INTERACTIVE_USER")
+INSTALL_DIR="/opt/illumina"
+MACHINE_DIR="/var/lib/illumina"
+HTTP_PORT="443"
+PORTAL_URL="https://localhost"
+
+echo "=================================================="
+echo "   Illumina AVA PC Installer - Ubuntu (v7.1)      "
+echo "   Guided setup for a safe, self-starting kiosk   "
+echo "=================================================="
+echo ""
+echo "  Welcome! This installer prepares this PC to run Illumina around the"
+echo "  clock: it fetches the latest release, configures secure local HTTPS,"
+echo "  and tailors the displays to your hardware. Every question explains"
+echo "  itself, and pressing ENTER always accepts the safe, recommended default."
+
+# ----------------------------- [1/8] DEPENDENCIES ---------------------------
+echo -e "\n==> [1/8] Checking essential tools..."
+apt-get update -qq > /dev/null
+apt-get install -y -qq curl unzip jq openssl > /dev/null
+echo "  All required tools (curl, unzip, jq, openssl) are ready."
+
+# ----------------------------- [2/8] GITHUB TOKEN ---------------------------
+echo -e "\n==> [2/8] Release access token..."
+mkdir -p "$MACHINE_DIR"
+TOKEN_FILE="$MACHINE_DIR/github-token"
+
+if [ -n "$GITHUB_TOKEN" ]; then
+    TOKEN="$GITHUB_TOKEN"
+    echo "  Using the token from this session's environment."
+elif [ -f "$TOKEN_FILE" ]; then
+    TOKEN=$(cat "$TOKEN_FILE")
+    echo "  Reusing the token stored on this machine - nothing to type."
+else
+    echo "  Illumina's release packages live in a private repository, so we need"
+    echo "  a read-only GitHub token once; it is then stored securely on this PC."
+    read -p "  Paste your GitHub read-only token: " TOKEN
+    if [ -z "$TOKEN" ]; then echo "  A token is required. Exiting."; exit 1; fi
+    echo "$TOKEN" > "$TOKEN_FILE"
+    chmod 600 "$TOKEN_FILE"
+    chown root:root "$TOKEN_FILE"
+    echo "  Token stored securely (root only)."
+fi
+
+# ----------------------------- [3/8] DOWNLOAD RELEASE -----------------------
+echo -e "\n==> [3/8] Downloading the latest Illumina release..."
+RELEASE_JSON=$(curl -s -H "Authorization: Bearer $TOKEN" -H "Accept: application/vnd.github+json" \
+    "https://api.github.com/repos/nickng70/Illumina-Releases/releases/latest")
+TAG_NAME=$(echo "$RELEASE_JSON" | jq -r '.tag_name')
+ASSET_URL=$(echo "$RELEASE_JSON" | jq -r '.assets[] | select(.name=="illumina-linux-x64.zip") | .url')
+
+if [ -z "$ASSET_URL" ] || [ "$ASSET_URL" = "null" ]; then
+    echo "  Asset 'illumina-linux-x64.zip' not found in release $TAG_NAME."
+    exit 1
+fi
+
+ZIP_FILE="/tmp/illumina-linux-x64.zip"
+curl -s -L -H "Authorization: Bearer $TOKEN" -H "Accept: application/octet-stream" -o "$ZIP_FILE" "$ASSET_URL"
+echo "  Release $TAG_NAME downloaded."
+
+# ----------------------------- [4/8] PAUSE PREVIOUS SESSION -----------------
+echo -e "\n==> [4/8] Pausing any running Illumina session..."
+pkill -f "Illumina" || true
+# Only kill Chrome processes running under the IlluminaKiosk profile
+pkill -f "IlluminaKiosk" || true
 sleep 2
-zenity --info --title="Illumina" --text="Illumina has been restarted!\nPlease wait a few seconds for the page to load." --width=320 &
-sleep 3
-firefox http://localhost:5152 &
-EOF
-chmod 755 /usr/local/bin/restart-illumina.sh
+rm -rf /tmp/IlluminaKiosk || true
+echo "  Previous session paused - your open browser tabs and files are untouched."
 
-# ---------------- Desktop shortcuts + autostart for avauser -----------------
-log "[9/10] Creating desktop shortcuts and autostart..."
-USER_HOME=$(getent passwd "$HUMAN_USER" | cut -d: -f6)
-DESKTOP=$(runuser -u "$HUMAN_USER" -- xdg-user-dir DESKTOP 2>/dev/null || true)
-[[ -n "$DESKTOP" ]] || DESKTOP="$USER_HOME/Desktop"
-mkdir -p "$DESKTOP" "$USER_HOME/.config/autostart"
+# ----------------------------- [5/8] KIOSK ACCOUNT & SIGN-IN ----------------
+echo -e "\n==> [5/8] Choosing the kiosk account and sign-in behavior..."
+echo ""
+echo "  How will this PC be used?"
+echo "  [1] Dedicated Church AVA PC (Recommended)"
+echo "      Creates a clean, standard-user account named 'avauser' just for Illumina."
+echo "      This keeps the desktop uncluttered and prevents accidental system changes."
+echo "  [2] Personal Laptop or IT Testing"
+echo "      Uses your current Linux account ($INTERACTIVE_USER)."
+echo "      Ideal for development, testing, or initial setup by an administrator."
 
-cat > "$DESKTOP/Restart-Illumina.desktop" <<EOF
-[Desktop Entry]
-Version=1.0
-Type=Application
-Name=Restart Illumina
-Comment=Emergency restart for the Illumina portal
-Exec=/usr/local/bin/restart-illumina.sh
-Icon=system-restart
-Terminal=false
-EOF
+read -p "  Select setup type (press ENTER for 1): " MODE
+USE_AVA_USER=false
+if [ "$MODE" != "2" ]; then USE_AVA_USER=true; fi
 
-cat > "$DESKTOP/Illumina-Portal.desktop" <<EOF
-[Desktop Entry]
-Version=1.0
-Type=Application
-Name=Illumina Portal
-Comment=Open the Illumina operator portal
-Exec=firefox http://localhost:$HTTP_PORT
-Icon=firefox
-Terminal=false
-EOF
+if [ "$USE_AVA_USER" = true ]; then
+    HUMAN_USER="avauser"
+    if ! id "$HUMAN_USER" &>/dev/null; then
+        echo "  Set the SECRET password for avauser (used for maintenance logins):"
+        passwd_prompt="  "
+        while true; do
+            read -s -p "  Password: " p1; echo
+            read -s -p "  Confirm : " p2; echo
+            if [ "$p1" = "$p2" ] && [ -n "$p1" ]; then
+                PLAIN_PASS="$p1"
+                break
+            fi
+            echo "  Passwords did not match or were empty. Try again."
+        done
+        useradd -m -s /bin/bash "$HUMAN_USER"
+        echo "$HUMAN_USER:$PLAIN_PASS" | chpasswd
+        echo "  Created kiosk account 'avauser'."
+    else
+        echo "  Reusing existing 'avauser' account."
+    fi
+    AUTO_LOGIN_ON=true
+else
+    HUMAN_USER="$INTERACTIVE_USER"
+    echo ""
+    echo "  Auto sign-in lets the PC boot straight into Illumina after a power cut."
+    echo "  On a personal laptop, you may prefer the normal logon screen instead."
+    read -p "  Enable auto sign-in for $HUMAN_USER? [y/N] (ENTER = No): " WANT_AUTO
+    if [[ "$WANT_AUTO" =~ ^[yY]$ ]]; then
+        echo "  Enter the sudo/sudo password for $HUMAN_USER to store for auto sign-in:"
+        read -s -p "  Password: " PLAIN_PASS; echo
+        AUTO_LOGIN_ON=true
+    else
+        AUTO_LOGIN_ON=false
+    fi
+fi
 
-cat > "$USER_HOME/.config/autostart/illumina-portal.desktop" <<EOF
-[Desktop Entry]
-Type=Application
-Name=Illumina Portal
-Exec=firefox http://localhost:$HTTP_PORT
-X-GNOME-Autostart-enabled=true
-X-GNOME-Autostart-Delay=8
-EOF
+# Configure GDM3 Auto-login
+GDM_CONF="/etc/gdm3/custom.conf"
+if [ "$AUTO_LOGIN_ON" = true ] && [ -f "$GDM_CONF" ]; then
+    sed -i '/^\[daemon\]/,/^\[/ s/^#\?AutomaticLoginEnable\s*=\s*.*/AutomaticLoginEnable=true/' "$GDM_CONF"
+    sed -i '/^\[daemon\]/,/^\[/ s/^#\?AutomaticLogin\s*=\s*.*/AutomaticLogin='"$HUMAN_USER"'/' "$GDM_CONF"
+    
+    if ! grep -q "AutomaticLoginEnable" "$GDM_CONF"; then
+        sed -i '/\[daemon\]/a AutomaticLoginEnable=true\nAutomaticLogin='"$HUMAN_USER" "$GDM_CONF"
+    fi
+    echo "  Auto sign-in configured for $HUMAN_USER - it activates at the next restart."
+else
+    echo "  Auto sign-in left OFF - the PC keeps its normal logon screen."
+fi
 
-chmod 755 "$DESKTOP"/*.desktop
-chown -R "$HUMAN_USER:$HUMAN_USER" "$DESKTOP" "$USER_HOME/.config/autostart"
-for f in "$DESKTOP"/*.desktop; do
-  runuser -u "$HUMAN_USER" -- gio set "$f" metadata::trusted true 2>/dev/null || true
+# ----------------------------- [6/8] APP FILES & PERMISSIONS ----------------
+echo -e "\n==> [6/8] Installing Illumina and preparing its content folders..."
+if [ -d "$INSTALL_DIR/Data" ]; then
+    mv "$INSTALL_DIR/Data" /tmp/illumina-data-backup
+fi
+rm -rf "$INSTALL_DIR"
+mkdir -p "$INSTALL_DIR"
+unzip -q "$ZIP_FILE" -d "$INSTALL_DIR"
+rm "$ZIP_FILE"
+
+if [ -d "/tmp/illumina-data-backup" ]; then
+    rm -rf "$INSTALL_DIR/Data"
+    mv /tmp/illumina-data-backup "$INSTALL_DIR/Data"
+fi
+mkdir -p "$INSTALL_DIR/Data"
+
+# Writable folders
+for W_DIR in SlideContent MediaContent AppData Recordings; do
+    mkdir -p "$INSTALL_DIR/$W_DIR"
+    chown -R "$HUMAN_USER:$HUMAN_USER" "$INSTALL_DIR/$W_DIR"
+    chmod 755 "$INSTALL_DIR/$W_DIR"
 done
 
-# No screen lock, no sleep - ever
-runuser -u "$HUMAN_USER" -- dbus-launch gsettings set org.gnome.desktop.session idle-delay 0 2>/dev/null || true
-runuser -u "$HUMAN_USER" -- dbus-launch gsettings set org.gnome.desktop.screensaver lock-enabled false 2>/dev/null || true
-runuser -u "$HUMAN_USER" -- dbus-launch gsettings set org.gnome.desktop.screensaver ubuntu-lock-on-suspend false 2>/dev/null || true
-systemctl mask sleep.target suspend.target hibernate.target hybrid-sleep.target >/dev/null 2>&1 || true
+# Content folders: On Linux, we don't need "hidden attribute" tricks.
+# Standard POSIX permissions (chmod 500) mean ONLY the kiosk user can read
+# or even list the contents of this folder. Other standard users are 
+# completely locked out by the kernel.
+chown -R "$HUMAN_USER:$HUMAN_USER" "$INSTALL_DIR/Data"
+chmod 500 "$INSTALL_DIR/Data"
+echo "  Content folders prepared with native Linux permissions (locked to $HUMAN_USER)."
+echo "$TAG_NAME" > "$MACHINE_DIR/current-version"
 
-# ---------------- Firewall ---------------------------------------------------
-log "[10/10] Configuring firewall..."
-ufw allow OpenSSH >/dev/null
-ufw allow "$HTTP_PORT/tcp" >/dev/null
-ufw --force enable >/dev/null
+# ----------------------------- [7/8] SURVEY, CERTS, OVERRIDES ---------------
+echo -e "\n==> [7/8] Site survey, HTTPS certificate, and machine settings..."
+echo ""
+echo "  Every church is wired differently, so we ask three quick questions."
+echo "  ENTER accepts the safe default (No) for each."
+read -p "  [1/3] Is a RIGHT Wall display connected? [y/N] (ENTER = No): " R_WALL
+read -p "  [2/3] Is a STREAMING/BROADCAST output used? [y/N] (ENTER = No): " STREAM
+read -p "  [3/3] Should Prayer/Announcement slides sync from Google Drive? [y/N] (ENTER = No): " SYNC
 
-echo
+RIGHT_ON=false; [[ "$R_WALL" =~ ^[yY]$ ]] && RIGHT_ON=true
+STREAM_ON=false; [[ "$STREAM" =~ ^[yY]$ ]] && STREAM_ON=true
+SYNC_ON=false; [[ "$SYNC" =~ ^[yY]$ ]] && SYNC_ON=true
+
+# Drive Sync
+KEY_JSON="$MACHINE_DIR/key.json"
+PRAYER_ID=""; ANN_ID=""
+if [ "$SYNC_ON" = true ]; then
+    if [ ! -f "$KEY_JSON" ]; then
+        echo "  Fetching Drive key from repository..."
+        curl -s -H "Authorization: Bearer $TOKEN" -H "Accept: application/vnd.github.raw" \
+            "https://api.github.com/repos/nickng70/Illumina-Releases/contents/secrets/drive-key.json" -o "$KEY_JSON"
+    fi
+    if [ -f "$KEY_JSON" ]; then
+        chown "$HUMAN_USER:$HUMAN_USER" "$KEY_JSON"
+        chmod 400 "$KEY_JSON"
+        read -p "  Prayer slides folder ID (Google Drive): " PRAYER_ID
+        read -p "  Announcements slides folder ID (Google Drive): " ANN_ID
+        if [ -z "$PRAYER_ID" ] || [ -z "$ANN_ID" ]; then SYNC_ON=false; fi
+    else
+        SYNC_ON=false
+    fi
+fi
+
+# HTTPS Certificate (Linux requires a PFX file path, unlike the Windows Store)
+echo "  Generating private 100-year HTTPS certificate..."
+PFX_PATH="$MACHINE_DIR/illumina.pfx"
+PFX_PASS="IlluminaKioskCert"
+openssl req -x509 -newkey rsa:4096 -keyout /tmp/illumina.key -out /tmp/illumina.crt -days 36500 -nodes -subj "/CN=localhost" > /dev/null 2>&1
+openssl pkcs12 -export -out "$PFX_PATH" -inkey /tmp/illumina.key -in /tmp/illumina.crt -passout pass:"$PFX_PASS" > /dev/null 2>&1
+rm /tmp/illumina.key /tmp/illumina.crt
+chown "$HUMAN_USER:$HUMAN_USER" "$PFX_PATH"
+chmod 400 "$PFX_PATH"
+
+# Build Overrides JSON using jq
+OVERRIDES="$INSTALL_DIR/AppData/AppSettingsOverrides.json"
+mkdir -p "$INSTALL_DIR/AppData"
+
+jq -n \
+  --arg pfx "$PFX_PATH" \
+  --arg pass "$PFX_PASS" \
+  --arg right "$RIGHT_ON" \
+  --arg stream "$STREAM_ON" \
+  --arg sync "$SYNC_ON" \
+  --arg key "$KEY_JSON" \
+  --arg prayer "$PRAYER_ID" \
+  --arg ann "$ANN_ID" \
+  '{
+    "Urls": "https://0.0.0.0:443;http://0.0.0.0:80",
+    "Kestrel": {
+      "Certificates": {
+        "Default": {
+          "Path": $pfx,
+          "Password": $pass
+        }
+      }
+    },
+    "Kiosk": {
+      "BaseUrl": "https://localhost",
+      "Enabled": true,
+      "RightWallEnabled": ($right == "true"),
+      "CgEnabled": ($stream == "true"),
+      "ProgramEnabled": ($stream == "true")
+    },
+    "SlideLibrary": {
+      "GoogleDrive": {
+        "ServiceAccountKeyPath": (if $sync == "true" then $key else "" end),
+        "PrayerFolderId": (if $sync == "true" then $prayer else "" end),
+        "AnnouncementsFolderId": (if $sync == "true" then $ann else "" end)
+      }
+    }
+  }' > "$OVERRIDES"
+chown "$HUMAN_USER:$HUMAN_USER" "$OVERRIDES"
+
+# ----------------------------- [8/8] HELPERS, SHORTCUTS, FIREWALL -----------
+echo -e "\n==> [8/8] Writing shortcuts, configuring firewall, and keeping the PC awake..."
+
+# Helper Scripts
+cat <<EOF > "$INSTALL_DIR/open-illumina.sh"
+#!/bin/bash
+APP="$INSTALL_DIR/Illumina"
+if ! pgrep -f "Illumina" > /dev/null; then
+    nohup "$APP" > /dev/null 2>&1 &
+    sleep 6
+fi
+google-chrome --app=https://localhost --user-data-dir=/tmp/IlluminaPortal > /dev/null 2>&1 &
+EOF
+
+cat <<EOF > "$INSTALL_DIR/restart-illumina.sh"
+#!/bin/bash
+pkill -f "Illumina"
+pkill -f "IlluminaKiosk"
+sleep 2
+rm -rf /tmp/IlluminaKiosk
+APP="$INSTALL_DIR/Illumina"
+nohup "$APP" > /dev/null 2>&1 &
+sleep 6
+google-chrome --app=https://localhost --user-data-dir=/tmp/IlluminaPortal > /dev/null 2>&1 &
+EOF
+
+chmod +x "$INSTALL_DIR/open-illumina.sh" "$INSTALL_DIR/restart-illumina.sh"
+
+# Desktop Shortcuts & Autostart
+DESKTOP_DIR="$USER_HOME/Desktop"
+AUTOSTART_DIR="$USER_HOME/.config/autostart"
+sudo -u "$HUMAN_USER" mkdir -p "$DESKTOP_DIR" "$AUTOSTART_DIR"
+
+create_desktop_file() {
+    local FILE_PATH=$1
+    local NAME=$2
+    local EXEC=$3
+    cat <<EOF > "$FILE_PATH"
+[Desktop Entry]
+Type=Application
+Name=$NAME
+Exec=$EXEC
+Icon=utilities-terminal
+Terminal=false
+EOF
+    chown "$HUMAN_USER:$HUMAN_USER" "$FILE_PATH"
+    chmod +x "$FILE_PATH"
+    # GNOME requires trusting the desktop file
+    if command -v gio &> /dev/null; then
+        sudo -u "$HUMAN_USER" gio set "$FILE_PATH" metadata::trusted true
+    fi
+}
+
+create_desktop_file "$DESKTOP_DIR/illumina.desktop" "Illumina" "$INSTALL_DIR/open-illumina.sh"
+create_desktop_file "$DESKTOP_DIR/restart-illumina.desktop" "Restart Illumina" "$INSTALL_DIR/restart-illumina.sh"
+
+if [ "$AUTO_LOGIN_ON" = true ]; then
+    create_desktop_file "$AUTOSTART_DIR/illumina.desktop" "Illumina" "$INSTALL_DIR/open-illumina.sh"
+fi
+
+# Firewall (UFW)
+if command -v ufw &> /dev/null; then
+    ufw allow 443/tcp > /dev/null
+    ufw allow 80/tcp > /dev/null
+fi
+
+# Disable Sleep
+systemctl mask sleep.target suspend.target hibernate.target hybrid-sleep.target > /dev/null 2>&1
+sudo -u "$HUMAN_USER" gsettings set org.gnome.settings-daemon.plugins.power sleep-inactive-ac-type 'nothing' > /dev/null 2>&1 || true
+
+echo ""
 echo "=================================================="
-echo "   ✅ Installation complete! ($RELEASE_TAG)"
-echo "   Portal:   http://localhost:$HTTP_PORT"
-echo "   Kiosk:    auto-logs in as $HUMAN_USER"
-echo "   Admin:    sudo su  (secret password)"
+echo "   Setup complete - Illumina $TAG_NAME is ready!"
 echo "=================================================="
-read -r -p "Reboot now to apply auto-login? [Y/n] " ans
-case "$ans" in [nN]*) echo "Reboot later with: sudo reboot";; *) reboot;; esac
+echo "   Kiosk account : $HUMAN_USER"
+echo "   Auto sign-in  : $([ "$AUTO_LOGIN_ON" = true ] && echo 'configured' || echo 'off - normal logon screen')"
+echo "   Right Wall    : $RIGHT_ON   Streaming: $STREAM_ON   Drive sync: $SYNC_ON"
+echo "   Portal        : $PORTAL_URL"
+echo ""
+
+if [ "$AUTO_LOGIN_ON" = true ]; then
+    echo "   Auto sign-in takes effect the next time this PC restarts - for example"
+    echo "   after a power cut or your next planned reboot. There is nothing you need"
+    echo "   to do right now: the desktop icon 'Illumina' starts everything immediately"
+    echo "   in this session, and from the next restart onward the PC will boot"
+    echo "   straight into Illumina on its own."
+    read -p "   Would you like to restart now to see auto sign-in in action? [y/N] (ENTER = No): " ANS
+    if [[ "$ANS" =~ ^[yY]$ ]]; then reboot; fi
+else
+    echo "   No restart is needed - everything is live already. The desktop icon"
+    echo "   'Illumina' starts the app and opens the portal any time."
+fi
