@@ -1,106 +1,105 @@
 # Illumina AVA PC Deployment Guide
 
-Welcome to the automated deployment system for **Illumina**, the audio-visual kiosk application designed for church services.
+Welcome to the automated deployment system for **Illumina**, the enterprise-grade audio-visual presentation platform designed for live production environments.
 
-This guide will walk you through transforming a standard PC into a dedicated, self-healing Illumina station in just a few minutes. Please select your operating system below.
+This guide will walk you through transforming a standard workstation into a dedicated, self-healing Illumina kiosk in just a few minutes. Our automated installers handle environment configuration, secure certificate generation, and display calibration seamlessly. 
+
+Please select your target operating system below.
 
 ---
 
-## 🪟 Option A: Windows 10 / 11 Installation
+## 🪟 Option A: Windows 10 / 11 Deployment
 
-### Before You Begin
+### Prerequisites
 * A PC running Windows 10 or 11.
 * Google Chrome installed.
-* Administrator access to the PC.
+* Local Administrator privileges for the initial setup.
 * Your GitHub Read-Only Token (provided by your IT administrator).
-* *Note: Ensure IIS or other web servers are not actively using port 443.*
+* *Note: Ensure IIS or other local web servers are not actively binding to port 443.*
 
 ### Step 1: Open PowerShell as Administrator
-* Right-click the **Start Button** (Windows icon).
-* Select **Terminal (Admin)** or **Windows PowerShell (Admin)**.
-* Click **Yes** if asked for permission.
+1. Right-click the **Start Button** (Windows icon).
+2. Select **Terminal (Admin)** or **Windows PowerShell (Admin)**.
+3. Click **Yes** if prompted by User Account Control.
 
-### Step 2: Run the Installer
-* Copy the command below.
-* Right-click inside the PowerShell window to paste it.
-* Press **Enter**.
+### Step 2: Execute the Deployment Script
+Copy the command below, right-click inside the PowerShell window to paste it, and press **Enter**:
 
 ```powershell
 irm https://raw.githubusercontent.com/nickng70/Illumina-Installer/main/install-windows.ps1 -OutFile "$env:TEMP\install-windows.ps1"; Unblock-File "$env:TEMP\install-windows.ps1"; powershell -ExecutionPolicy Bypass -File "$env:TEMP\install-windows.ps1"
 ```
 
-### Step 3: Follow the Prompts
-* **GitHub Token:** Paste your token (you won't see characters as you type — just paste and press Enter).
-* **Admin Password:** Create a strong password for the new `avauser` kiosk account. **Write this down.** You will need it for future maintenance.
+### Step 3: Interactive Configuration
+The installer will guide you through a brief, self-explanatory setup process:
+* **Access Token:** Paste your GitHub token (characters are hidden for security).
+* **Environment Profile:** Choose between creating a dedicated, locked-down kiosk account (`avauser`) or utilizing the current Windows account (ideal for IT testing or personal laptops).
+* **Hardware Survey:** Answer three quick questions about your physical display outputs (e.g., Right Wall, Streaming) to automatically calibrate the software to your hardware.
+* **Auto Sign-In:** Choose whether the PC should boot directly into Illumina without requiring a password.
 
-### Step 4: Reboot
-* When asked to reboot, type `Y` and press **Enter**.
-* The PC will restart and automatically log into the new Illumina kiosk interface.
+### Step 4: Activation & Reboot
+Once the script completes, Illumina is fully installed and **live immediately**. You can launch it right away using the new desktop shortcut. 
+* If you elected to enable Auto Sign-In, the installer will offer an *optional* reboot to activate the zero-touch boot sequence for all future startups. 
 
 ---
 
-## 🐧 Option B: Ubuntu Desktop Installation
+## 🐧 Option B: Ubuntu Desktop Deployment
 
-### Before You Begin
+### Prerequisites
 * A PC running Ubuntu Desktop (22.04, 24.04, or 26.04 LTS recommended).
 * An active internet connection.
-* The administrator (sudo) password for the PC.
+* The administrator (`sudo`) password for the PC.
 * Your GitHub Read-Only Token (provided by your IT administrator).
 
 ### Step 1: Open the Terminal
-* Press **Ctrl + Alt + T** on your keyboard.
-* A terminal window will appear on your screen.
+Press **Ctrl + Alt + T** on your keyboard to open a terminal window.
 
-### Step 2: Run the Installer
-* Copy the command below.
-* **Right-click** inside the terminal window and select **Paste** (*Note: Ctrl+V usually does not work in Linux terminals*).
-* Press **Enter**.
+### Step 2: Execute the Deployment Script
+Copy the command below, right-click inside the terminal to paste it, and press **Enter**:
 
 ```bash
 curl -sSL https://raw.githubusercontent.com/nickng70/Illumina-Installer/main/install-ubuntu.sh -o /tmp/install-ubuntu.sh && sudo bash /tmp/install-ubuntu.sh
 ```
 
-### Step 3: Follow the Prompts
-* **Sudo Password:** It will first ask for your current PC admin password to begin the installation.
-* **GitHub Token:** Paste your token when prompted.
-* **Kiosk Password:** You will be asked to set a secret password for the `avauser` kiosk account. **Write this down.**
-* *Note: When typing passwords in the Linux terminal, the screen will remain completely blank (no asterisks will appear). This is normal Linux security behaviour — just type the password blindly and press Enter.*
+### Step 3: Interactive Configuration
+* **Sudo Password:** Enter your current PC admin password to authorize the installation.
+* **Access Token:** Paste your GitHub token when prompted.
+* **Environment Profile:** Choose between a dedicated `avauser` or your current Linux account.
+* **Hardware Survey:** Configure your display outputs to match your physical hardware.
+* *Note: When typing passwords in the Linux terminal, the screen will remain completely blank (no asterisks will appear). This is standard POSIX security behavior — simply type the password and press Enter.*
 
-### Step 4: Reboot
-* When the installation finishes, it will ask if you want to reboot. Type `Y` and press **Enter**.
-* The PC will restart and automatically log into the new Illumina kiosk interface.
+### Step 4: Activation & Reboot
+The application is fully installed and **live immediately** upon completion. If you configured Auto Sign-In, the script will offer an optional reboot to activate the automated login sequence for future power cycles.
 
 ---
 
-## 🖥️ Daily Operation (For AV Volunteers)
+## 🖥️ Daily Operation & Recovery
 
-Once installed, the PC is designed to be as stress-free as possible during services.
+Once deployed, the PC is designed to be as stress-free as possible during live services.
 
 ### Powering On
-Simply press the power button on the PC.
-* The PC will boot up and **automatically log in** to the Illumina interface.
-* No passwords are required to start the system.
-* The Illumina portal and display walls will launch automatically.
+If Auto Sign-In was enabled, simply press the power button on the PC. The system will boot, authenticate silently, and launch the Illumina portal and display walls automatically. No manual intervention is required.
 
-### The Two Desktop Icons
-If the portal browser window is accidentally closed, or the system freezes, look for these two icons on the desktop:
+### The Desktop Shortcuts
+If the portal browser window is accidentally closed, or the system requires a reset, utilize the desktop shortcuts:
 
-| Icon Name | When to use it | What it does |
+| Shortcut | Purpose | System Behavior |
 | :--- | :--- | :--- |
-| **Illumina** | **Everyday Use.** Click this if the browser was closed. | Safely checks if the app is running and reopens the portal. **It will never interrupt a live broadcast.** |
-| **Restart Illumina (if misbehaving)** | **Emergency Only.** Click this only if the screens are frozen or glitching. | Force-closes everything and starts fresh. **Warning:** This *will* cut a live broadcast stream if one is currently running. |
+| **Illumina** | **Standard Launch** | Verifies the backend service is running and opens the operator portal. Completely non-destructive; safe to click at any time, even during a live broadcast. |
+| **Restart Illumina** | **Emergency Recovery** | Force-closes the backend and all associated kiosk display windows, then performs a clean launch. *Warning: This will terminate any active broadcast streams or recordings.* |
 
 ---
 
-## 🔄 Updating the Software
+## 🔄 Seamless Software Updates
 
-When your IT team releases a new version of Illumina, you do not need to uninstall anything.
+Illumina utilizes an **idempotent deployment model**. When your IT team releases a new version, you do not need to uninstall anything.
 
-Simply run the **exact same installation command** (from Step 2 above) for your operating system. The installer is smart: it will safely preserve your church's Bible and Hymn data, download the newest software, and seamlessly apply the update.
+Simply re-run the **exact same installation command** (from Step 2 above) for your operating system. The installer is intelligent: it will automatically back up and preserve your local media libraries, download the newest compiled binaries, and seamlessly apply the update in place.
 
 ---
 
-## 🛡️ Security & Data Protection
+## 🛡️ Architecture & Security Posture
 
-* **Automatic Lockdown:** The system automatically protects your church's proprietary data (Bible translations, Hymn lyrics) so it cannot be easily copied by unauthorised users.
-* **Source Code Protection:** The installer only downloads the compiled, ready-to-run application. The source code is never exposed to the PC.
+* **Principle of Least Privilege:** When deployed in Kiosk Mode, the application runs under a strictly confined Standard User account. This prevents unauthorized system modifications, accidental software installations, and protects the OS integrity.
+* **Native Content Security:** Proprietary media assets and application libraries are secured using native OS-level permissions (Windows ACLs / Linux POSIX `chmod`). Content is strictly isolated and inaccessible to unauthorized user profiles or external browsing.
+* **Closed-Source Delivery:** The deployment pipeline fetches only the compiled, production-ready binaries. Source code and development artifacts are never exposed to the endpoint machine.
+* **Automated Cryptography:** The installer automatically generates and trusts a private, machine-local HTTPS certificate, ensuring encrypted local traffic without relying on external certificate authorities or exposing the portal to the public internet.
