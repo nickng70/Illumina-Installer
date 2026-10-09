@@ -2,13 +2,14 @@
 # ==============================================================================
 # Illumina AVA PC Installer - Ubuntu 22.04/24.04 LTS (v8.0 FINAL)
 # - Friendly sudo check; nothing changes before it passes
-# - Provisions media engines via apt: LibreOffice (slides), FFmpeg
-#   (broadcast), and Google Chrome (display browser) if missing
-# - Resolved dependency paths stamped into the per-machine overrides layer
-#   (AppData/AppSettingsOverrides.json) - appsettings.json stays universal
+# - Provisions media engines via apt: LibreOffice, FFmpeg, and Google Chrome
+#   (official .deb) if missing
+# - Five-question survey incl. Home Assistant (optional Docker install here,
+#   where it is officially supported) and Novastar
+# - Resolved dependency paths + integration settings stamped into the
+#   per-machine overrides layer (merge, never clobber)
 # - Clean [1]/[2] kiosk-account menu; GDM3 auto sign-in; ufw; sleep masked
-# - HTTPS via a private 100-year PFX (Kestrel on Linux reads a file, not a
-#   Windows store) + system CA trust so Chrome shows a clean padlock
+# - HTTPS via a private 100-year PFX + system CA trust for a clean padlock
 # ==============================================================================
 set -e
 
@@ -45,9 +46,9 @@ echo "=================================================="
 echo ""
 echo "  Welcome! This installer prepares this PC to run Illumina around the"
 echo "  clock: it fetches the latest release and the media engines it needs,"
-echo "  configures secure local HTTPS, and tailors the displays to your"
-echo "  hardware. Every question explains itself, and pressing ENTER always"
-echo "  accepts the safe, recommended default."
+echo "  configures secure local HTTPS, and tailors the displays and smart"
+echo "  integrations to your hardware. Every question explains itself, and"
+echo "  pressing ENTER always accepts the safe, recommended default."
 
 # ----------------------------- [1/9] DEPENDENCIES ---------------------------
 echo -e "\n==> [1/9] Checking essential tools..."
@@ -196,11 +197,16 @@ echo "$TAG_NAME" > "$MACHINE_DIR/current-version"
 # ----------------------------- [8/9] SURVEY, CERT, OVERRIDES ----------------
 echo -e "\n==> [8/9] Site survey, HTTPS certificate, and machine settings..."
 echo ""
-echo "  Every church is wired differently, so we ask three quick questions."
+echo "  Every church is wired differently, so we ask five quick questions."
 echo "  ENTER accepts the safe default (No) for each."
-read -p "  [1/3] Is a RIGHT Wall display connected (in addition to the Left Wall)? [y/N] (ENTER = No): " R_WALL
-read -p "  [2/3] Is a STREAMING/BROADCAST output used (CG overlay + encoder + stream monitors)? [y/N] (ENTER = No): " STREAM
-read -p "  [3/3] Should Prayer/Announcement slides sync from Google Drive? [y/N] (ENTER = No): " SYNC
+read -p "  [1/5] Is a RIGHT Display connected (in addition to the Left Display)? [y/N] (ENTER = No): " R_WALL
+read -p "  [2/5] Is a STREAMING/BROADCAST output used (CG overlay + encoder + stream monitors)? [y/N] (ENTER = No): " STREAM
+read -p "  [3/5] Should Prayer/Announcement slides sync from Google Drive? [y/N] (ENTER = No): " SYNC
+echo ""
+echo "  Illumina can also talk to the smart hardware many churches already own."
+echo "  Both integrations are optional and can be switched on later in Settings."
+read -p "  [4/5] Do you automate AV devices (e.g. Tapo smart switches for wall and rack power) through Home Assistant? [y/N] (ENTER = No): " HA_USE
+read -p "  [5/5] Is a Novastar LED video controller on the local network (brightness schedules + cabinet health)? [y/N] (ENTER = No): " NV_USE
 RIGHT_ON=false;  [[ "$R_WALL" =~ ^[yY]$ ]] && RIGHT_ON=true
 STREAM_ON=false; [[ "$STREAM" =~ ^[yY]$ ]] && STREAM_ON=true
 SYNC_ON=false;   [[ "$SYNC"   =~ ^[yY]$ ]] && SYNC_ON=true
@@ -222,6 +228,46 @@ if [ "$SYNC_ON" = true ]; then
     fi
 fi
 
+# ---- Home Assistant: detect, address, and (on Ubuntu only) offer a real install
+HA_ON=false; HA_URL=""
+if [[ "$HA_USE" =~ ^[yY]$ ]]; then
+    if curl -s -o /dev/null --max-time 3 http://localhost:8123; then
+        HA_URL="http://localhost:8123"; HA_ON=true
+        echo "  Home Assistant detected on this PC."
+    fi
+    if [ -z "$HA_URL" ]; then
+        read -p "  Home Assistant address on your network (e.g. http://192.168.1.50:8123), or ENTER if not set up yet: " HA_URL
+        if [ -n "$HA_URL" ]; then HA_ON=true; echo "  Home Assistant will be reached at $HA_URL"; fi
+    fi
+    if [ -z "$HA_URL" ]; then
+        read -p "  Install Home Assistant now on this PC (Docker container, host networking)? [Y/n] (ENTER = Yes): " HA_INSTALL
+        if [[ ! "$HA_INSTALL" =~ ^[nN] ]]; then
+            if ! command -v docker > /dev/null 2>&1; then
+                echo "  Installing Docker..."
+                apt-get install -y -qq docker.io > /dev/null
+                systemctl enable --now docker > /dev/null 2>&1 || true
+            fi
+            mkdir -p /var/lib/homeassistant
+            if ! docker ps -a --format '{{.Names}}' 2>/dev/null | grep -q '^homeassistant$'; then
+                docker run -d --name homeassistant --restart=unless-stopped --network=host \
+                    -v /var/lib/homeassistant:/config ghcr.io/home-assistant/home-assistant:stable > /dev/null
+            fi
+            HA_URL="http://localhost:8123"; HA_ON=true
+            echo "  Home Assistant installed - its dashboard appears at http://localhost:8123 once first boot finishes (1-2 minutes)."
+        else
+            echo "  No problem - you can add the address any time in Settings > Device Setup."
+        fi
+    fi
+fi
+
+# ---- Novastar: configure, don't conquer (token pairing stays in the portal)
+NV_ON=false; NV_HOST=""
+if [[ "$NV_USE" =~ ^[yY]$ ]]; then
+    read -p "  Novastar controller IP address (e.g. 172.16.0.11): " NV_HOST
+    if [ -n "$NV_HOST" ]; then NV_ON=true; echo "  Novastar will target $NV_HOST - pair the auth token later in Settings > Device Setup."; fi
+    if [ -z "$NV_HOST" ]; then echo "  No controller address given - Novastar integration left OFF."; fi
+fi
+
 echo ""
 echo "  Illumina serves its portal over HTTPS on this PC only. We create a private"
 echo "  100-year certificate, trust it system-wide, and hand Kestrel the PFX path."
@@ -241,6 +287,8 @@ mkdir -p "$INSTALL_DIR/AppData"
 jq \
   --arg pfx "$PFX_PATH" --arg pass "$PFX_PASS" \
   --argjson right "$RIGHT_ON" --argjson stream "$STREAM_ON" --argjson sync "$SYNC_ON" \
+  --argjson haon "$HA_ON" --arg haurl "$HA_URL" \
+  --argjson nvon "$NV_ON" --arg nvhost "$NV_HOST" \
   --arg key "$KEY_JSON" --arg prayer "$PRAYER_ID" --arg ann "$ANN_ID" \
   --arg soffice "/usr/bin/soffice" --arg ffmpeg "/usr/bin/ffmpeg" \
   '
@@ -257,6 +305,8 @@ jq \
           AnnouncementsFolderId: (if $sync then $ann else "" end)
         } })
     | .Broadcast = ((.Broadcast // {}) + { FFmpegPath: $ffmpeg })
+    | .HomeAssistant = ((.HomeAssistant // {}) + { Enabled: $haon } + (if $haurl != "" then { BaseUrl: $haurl } else {} end))
+    | .Novastar = ((.Novastar // {}) + { Enabled: $nvon } + (if $nvon then { Host: $nvhost } else {} end))
   ' "$OVERRIDES" > "$OVERRIDES.tmp" && mv "$OVERRIDES.tmp" "$OVERRIDES"
 chown "$HUMAN_USER:$HUMAN_USER" "$OVERRIDES"
 echo "  Dependency paths stamped: LibreOffice='/usr/bin/soffice' FFmpeg='/usr/bin/ffmpeg'"
@@ -324,7 +374,8 @@ echo "   Setup complete - Illumina $TAG_NAME is ready!"
 echo "=================================================="
 echo "   Kiosk account : $HUMAN_USER"
 echo "   Auto sign-in  : $([ "$AUTO_LOGIN_ON" = true ] && echo 'configured' || echo 'off - normal logon screen')"
-echo "   Right Wall    : $RIGHT_ON   Streaming: $STREAM_ON   Drive sync: $SYNC_ON"
+echo "   Right Display : $RIGHT_ON   Streaming: $STREAM_ON   Drive sync: $SYNC_ON"
+echo "   Home Assistant: $([ "$HA_ON" = true ] && echo "$HA_URL" || echo 'off')   Novastar: $([ "$NV_ON" = true ] && echo "$NV_HOST" || echo 'off')"
 echo "   Portal        : $PORTAL_URL"
 echo ""
 if [ "$AUTO_LOGIN_ON" = true ]; then
