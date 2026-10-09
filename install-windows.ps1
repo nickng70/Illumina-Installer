@@ -9,6 +9,8 @@
       guidance (HA is officially Linux/VM/appliance territory)
     - Resolved dependency paths + integration settings stamped into the
       per-machine overrides layer; appsettings.json stays universal
+    - Binding contract per AGENTS.md: HTTPS localhost-only + HTTP on all
+      interfaces for congregation phones; QR BaseUrl auto-stamped
     - Clean [1]/[2] kiosk-account menu; surgical process handling
     - Content folders permission-locked and hidden quietly
     - HTTPS via a private 100-year certificate in the machine store
@@ -283,8 +285,11 @@ Write-Host ""
 Write-Host "  Every church is wired differently, so we ask five quick questions."
 Write-Host "  ENTER accepts the safe default (No) for each, and everything here can"
 Write-Host "  be changed later in Settings without reinstalling."
+Write-Host "  Note: the CG overlay output is always prepared as part of the core"
+Write-Host "  display set (like the Left Display); question 2 controls the broadcast"
+Write-Host "  encoder, stream monitors and Aux Hall."
 $rightWall = Read-Host "  [1/5] Is a RIGHT Display connected (in addition to the Left Display)? [y/N] (ENTER = No)"
-$streaming = Read-Host "  [2/5] Is a STREAMING/BROADCAST output used (CG overlay + encoder + stream monitors)? [y/N] (ENTER = No)"
+$streaming = Read-Host "  [2/5] Is a STREAMING/BROADCAST setup used (encoder, stream monitors, Aux Hall)? [y/N] (ENTER = No)"
 $sync      = Read-Host "  [3/5] Should Prayer/Announcement slides sync from Google Drive? [y/N] (ENTER = No)"
 Write-Host ""
 Write-Host "  Illumina can also talk to the smart hardware many churches already own."
@@ -376,7 +381,9 @@ if ($obj.PSObject.Properties.Name -contains "Kestrel") {
     $obj.PSObject.Properties.Remove("Kestrel")
     Log "Removed an outdated certificate override from a previous install."
 }
-$obj | Add-Member -NotePropertyName "Urls" -Force -NotePropertyValue "https://0.0.0.0:$HttpPort;http://0.0.0.0:80"
+# AGENTS.md binding contract: HTTPS on localhost only; congregation phones
+# and tablets reach the plain-HTTP endpoint on every interface (port 80).
+$obj | Add-Member -NotePropertyName "Urls" -Force -NotePropertyValue "https://localhost;http://0.0.0.0:80"
 
 if ($obj.PSObject.Properties.Name -notcontains "Kiosk") { $obj | Add-Member -NotePropertyName "Kiosk" -NotePropertyValue ([PSCustomObject]@{}) }
 $k = $obj.Kiosk
@@ -417,6 +424,18 @@ if ($obj.PSObject.Properties.Name -notcontains "Novastar") { $obj | Add-Member -
 $nv = $obj.Novastar
 $nv | Add-Member -NotePropertyName "Enabled" -NotePropertyValue $novastarOn -Force
 if ($novastarOn) { $nv | Add-Member -NotePropertyName "Host" -NotePropertyValue $novastarHost -Force }
+
+# Member phones reach the AVA PC over the LAN; the QR overlay and the /view
+# page use CongregationView:BaseUrl, so stamp this machine's LAN address.
+# Settings can refine it later (e.g. a static DNS name).
+$lanIp = (Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+          Where-Object { $_.IPAddress -ne '127.0.0.1' -and $_.IPAddress -notlike '169.254.*' } |
+          Select-Object -First 1).IPAddress
+if ($lanIp) {
+    if ($obj.PSObject.Properties.Name -notcontains "CongregationView") { $obj | Add-Member -NotePropertyName "CongregationView" -NotePropertyValue ([PSCustomObject]@{}) }
+    $obj.CongregationView | Add-Member -NotePropertyName "BaseUrl" -NotePropertyValue "http://$lanIp" -Force
+    Log "Congregation phones will reach this PC at http://$lanIp (QR overlay + /view page)."
+}
 
 Log "Dependency paths stamped: LibreOffice='$sofficeResolved' FFmpeg='$ffmpegResolved'"
 $obj | ConvertTo-Json -Depth 10 | Set-Content $overridesPath
@@ -524,6 +543,7 @@ Write-Host "   Auto sign-in  : $(if ($autoLoginOn) { 'configured' } else { 'off 
 Write-Host "   Right Display : $rightWallOn   Streaming: $streamOn   Drive sync: $syncOn"
 Write-Host "   Home Assistant: $(if ($haOn) { $haUrl } else { 'off' })   Novastar: $(if ($novastarOn) { $novastarHost } else { 'off' })"
 Write-Host "   Portal        : $PortalUrl  (desktop icon 'Illumina' opens it any time)"
+if ($lanIp) { Write-Host "   Phones        : http://$lanIp  (QR overlay + /view page)" }
 Write-Host ""
 if ($autoLoginOn) {
     Write-Host "   Auto sign-in takes effect the next time this PC restarts - for example"
