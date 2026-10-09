@@ -3,13 +3,17 @@
     - Friendly administrator check; nothing changes before it passes
     - Provisions media engines from the internet: LibreOffice (slides),
       FFmpeg (broadcast), and Chrome itself if missing (winget)
-    - Resolved dependency paths are stamped into the per-machine overrides
-      layer (AppData/AppSettingsOverrides.json) - the checked-in
-      appsettings.json always stays universal and untouched
-    - Clean [1]/[2] kiosk-account menu; surgical process handling (personal
-      Chrome never touched); conditional, warm reboot guidance
+    - Five-question survey (Right Display / Streaming / Drive sync /
+      Home Assistant / Novastar); ENTER = No everywhere
+    - Home Assistant: detect first, then address; Windows gets honest
+      guidance (HA is officially Linux/VM/appliance territory)
+    - Resolved dependency paths + integration settings stamped into the
+      per-machine overrides layer; appsettings.json stays universal
+    - Clean [1]/[2] kiosk-account menu; surgical process handling
     - Content folders permission-locked and hidden quietly
     - HTTPS via a private 100-year certificate in the machine store
+    - Human-facing labels use "Display"; internal config keys keep their
+      legacy names for backwards compatibility with deployed churches
 #>
 $ErrorActionPreference = "Stop"
 
@@ -61,9 +65,9 @@ Write-Host "==================================================" -ForegroundColor
 Write-Host ""
 Write-Host "  Welcome! This installer prepares this PC to run Illumina around the"
 Write-Host "  clock: it fetches the latest release and the media engines it needs,"
-Write-Host "  configures secure local HTTPS, and tailors the displays to your"
-Write-Host "  hardware. Every question explains itself, and pressing ENTER always"
-Write-Host "  accepts the safe, recommended default."
+Write-Host "  configures secure local HTTPS, and tailors the displays and smart"
+Write-Host "  integrations to your hardware. Every question explains itself, and"
+Write-Host "  pressing ENTER always accepts the safe, recommended default."
 
 # ---------------- [1/9] GitHub token ----------------------------------------
 Log "[1/9] Release access token..."
@@ -276,17 +280,23 @@ Set-Content "$MachineDir\current-version" $Release.tag_name
 # ---------------- [7/9] Survey + certificate + machine config ---------------
 Log "[7/9] Site survey, HTTPS certificate, and machine settings..."
 Write-Host ""
-Write-Host "  Every church is wired differently, so we ask three quick questions."
+Write-Host "  Every church is wired differently, so we ask five quick questions."
 Write-Host "  ENTER accepts the safe default (No) for each, and everything here can"
-Write-Host "  be changed later in Settings > Displays without reinstalling."
-$rightWall = Read-Host "  [1/3] Is a RIGHT Wall display connected (in addition to the Left Wall)? [y/N] (ENTER = No)"
-$streaming = Read-Host "  [2/3] Is a STREAMING/BROADCAST output used (CG overlay + encoder + stream monitors)? [y/N] (ENTER = No)"
-$sync      = Read-Host "  [3/3] Should Prayer/Announcement slides sync from Google Drive? [y/N] (ENTER = No)"
+Write-Host "  be changed later in Settings without reinstalling."
+$rightWall = Read-Host "  [1/5] Is a RIGHT Display connected (in addition to the Left Display)? [y/N] (ENTER = No)"
+$streaming = Read-Host "  [2/5] Is a STREAMING/BROADCAST output used (CG overlay + encoder + stream monitors)? [y/N] (ENTER = No)"
+$sync      = Read-Host "  [3/5] Should Prayer/Announcement slides sync from Google Drive? [y/N] (ENTER = No)"
+Write-Host ""
+Write-Host "  Illumina can also talk to the smart hardware many churches already own."
+Write-Host "  Both integrations are optional and can be switched on later in Settings."
+$haUse       = Read-Host "  [4/5] Do you automate AV devices (e.g. Tapo smart switches for wall and rack power) through Home Assistant? [y/N] (ENTER = No)"
+$novastarUse = Read-Host "  [5/5] Is a Novastar LED video controller on the local network (brightness schedules + cabinet health)? [y/N] (ENTER = No)"
 $rightWallOn = ($rightWall -match '^[yY]')
 $streamOn    = ($streaming -match '^[yY]')
 $syncOn      = ($sync -match '^[yY]')
-Log "Survey recorded - Right Wall: $rightWallOn | Streaming: $streamOn | Drive sync: $syncOn"
+Log "Survey recorded - Right Display: $rightWallOn | Streaming: $streamOn | Drive sync: $syncOn"
 
+# ---- Google Drive key + folder IDs (only when sync was requested) ----
 $keyJson  = "$MachineDir\key.json"
 $prayerId = ""; $annId = ""
 if ($syncOn) {
@@ -313,6 +323,35 @@ if ($syncOn) {
     } else { $syncOn = $false; Log "No Drive key available, so Drive sync stays OFF on this machine." }
 }
 
+# ---- Home Assistant: detect first, then address (Windows guides, never hacks) ----
+$haOn = $false; $haUrl = ""
+if ($haUse -match '^[yY]') {
+    try {
+        Invoke-WebRequest -Uri "http://localhost:8123" -UseBasicParsing -TimeoutSec 3 | Out-Null
+        $haUrl = "http://localhost:8123"; $haOn = $true
+        Log "Home Assistant detected on this PC."
+    } catch { }
+    if (-not $haUrl) {
+        $haUrl = Read-Host "  Home Assistant address on your network (e.g. http://192.168.1.50:8123), or ENTER if not set up yet"
+        if ($haUrl) { $haOn = $true; Log "Home Assistant will be reached at $haUrl" }
+    }
+    if (-not $haUrl) {
+        Write-Host "  Home Assistant is officially supported on Linux, VMs and dedicated hardware"
+        Write-Host "  (a Raspberry Pi is the church favourite). On this Windows PC we recommend one"
+        Write-Host "  of those; Illumina only needs its web address, which you can add any time in"
+        Write-Host "  Settings > Device Setup."
+    }
+}
+
+# ---- Novastar: configure, don't conquer (token pairing stays in the portal) ----
+$novastarOn = $false; $novastarHost = ""
+if ($novastarUse -match '^[yY]') {
+    $novastarHost = Read-Host "  Novastar controller IP address (e.g. 172.16.0.11)"
+    if ($novastarHost) { $novastarOn = $true; Log "Novastar will target $novastarHost - pair the auth token later in Settings > Device Setup." }
+    else { Log "No controller address given - Novastar integration left OFF." }
+}
+
+# ---- Private, machine-trusted HTTPS certificate (store-based) ----
 Write-Host ""
 Write-Host "  Illumina serves its portal over HTTPS on this PC only. We create a private"
 Write-Host "  100-year certificate and trust it machine-wide, so browsers show a clean"
@@ -348,7 +387,6 @@ $k | Add-Member -NotePropertyName "CgEnabled"        -NotePropertyValue $streamO
 $k | Add-Member -NotePropertyName "ProgramEnabled"   -NotePropertyValue $streamOn     -Force
 if (-not $streamOn) { $k | Add-Member -NotePropertyName "CgConfidenceMonitorEnabled" -NotePropertyValue $false -Force }
 
-# Dependency paths: resolved on THIS machine, stamped for the app to consume.
 $sofficeResolved = if (Test-Path $SofficePath) { $SofficePath } else { "" }
 $ffmpegResolved  = if (Test-Path $FfmpegPath)  { $FfmpegPath }  else { "" }
 if ($obj.PSObject.Properties.Name -notcontains "SlideLibrary") { $obj | Add-Member -NotePropertyName "SlideLibrary" -NotePropertyValue ([PSCustomObject]@{}) }
@@ -369,6 +407,17 @@ if ($syncOn) {
 }
 if ($obj.PSObject.Properties.Name -notcontains "Broadcast") { $obj | Add-Member -NotePropertyName "Broadcast" -NotePropertyValue ([PSCustomObject]@{}) }
 $obj.Broadcast | Add-Member -NotePropertyName "FFmpegPath" -NotePropertyValue $ffmpegResolved -Force
+
+if ($obj.PSObject.Properties.Name -notcontains "HomeAssistant") { $obj | Add-Member -NotePropertyName "HomeAssistant" -NotePropertyValue ([PSCustomObject]@{}) }
+$ha = $obj.HomeAssistant
+$ha | Add-Member -NotePropertyName "Enabled" -NotePropertyValue $haOn -Force
+if ($haUrl) { $ha | Add-Member -NotePropertyName "BaseUrl" -NotePropertyValue $haUrl -Force }
+
+if ($obj.PSObject.Properties.Name -notcontains "Novastar") { $obj | Add-Member -NotePropertyName "Novastar" -NotePropertyValue ([PSCustomObject]@{}) }
+$nv = $obj.Novastar
+$nv | Add-Member -NotePropertyName "Enabled" -NotePropertyValue $novastarOn -Force
+if ($novastarOn) { $nv | Add-Member -NotePropertyName "Host" -NotePropertyValue $novastarHost -Force }
+
 Log "Dependency paths stamped: LibreOffice='$sofficeResolved' FFmpeg='$ffmpegResolved'"
 $obj | ConvertTo-Json -Depth 10 | Set-Content $overridesPath
 
@@ -472,7 +521,8 @@ Write-Host "   Setup complete - Illumina $($Release.tag_name) is ready!" -Foregr
 Write-Host "==================================================" -ForegroundColor Cyan
 Write-Host "   Kiosk account : $HumanUser$(if ($useAvaUser) { ' (dedicated standard account)' } else { ' (this PC''s existing account)' })"
 Write-Host "   Auto sign-in  : $(if ($autoLoginOn) { 'configured' } else { 'off - normal logon screen' })"
-Write-Host "   Right Wall    : $rightWallOn   Streaming: $streamOn   Drive sync: $syncOn"
+Write-Host "   Right Display : $rightWallOn   Streaming: $streamOn   Drive sync: $syncOn"
+Write-Host "   Home Assistant: $(if ($haOn) { $haUrl } else { 'off' })   Novastar: $(if ($novastarOn) { $novastarHost } else { 'off' })"
 Write-Host "   Portal        : $PortalUrl  (desktop icon 'Illumina' opens it any time)"
 Write-Host ""
 if ($autoLoginOn) {
