@@ -6,6 +6,8 @@
 #   (official .deb) if missing
 # - Five-question survey incl. Home Assistant (optional Docker install here,
 #   where it is officially supported) and Novastar
+# - Binding contract per AGENTS.md: HTTPS localhost-only + HTTP on all
+#   interfaces; congregation QR BaseUrl auto-stamped from the LAN address
 # - Resolved dependency paths + integration settings stamped into the
 #   per-machine overrides layer (merge, never clobber)
 # - Clean [1]/[2] kiosk-account menu; GDM3 auto sign-in; ufw; sleep masked
@@ -199,8 +201,11 @@ echo -e "\n==> [8/9] Site survey, HTTPS certificate, and machine settings..."
 echo ""
 echo "  Every church is wired differently, so we ask five quick questions."
 echo "  ENTER accepts the safe default (No) for each."
+echo "  Note: the CG overlay output is always prepared as part of the core"
+echo "  display set (like the Left Display); question 2 controls the broadcast"
+echo "  encoder, stream monitors and Aux Hall."
 read -p "  [1/5] Is a RIGHT Display connected (in addition to the Left Display)? [y/N] (ENTER = No): " R_WALL
-read -p "  [2/5] Is a STREAMING/BROADCAST output used (CG overlay + encoder + stream monitors)? [y/N] (ENTER = No): " STREAM
+read -p "  [2/5] Is a STREAMING/BROADCAST setup used (encoder, stream monitors, Aux Hall)? [y/N] (ENTER = No): " STREAM
 read -p "  [3/5] Should Prayer/Announcement slides sync from Google Drive? [y/N] (ENTER = No): " SYNC
 echo ""
 echo "  Illumina can also talk to the smart hardware many churches already own."
@@ -280,6 +285,11 @@ rm -f /tmp/illumina.key /tmp/illumina.crt
 chown "$HUMAN_USER:$HUMAN_USER" "$PFX_PATH"; chmod 400 "$PFX_PATH"
 echo "  Certificate created, trusted system-wide, and ready for Kestrel."
 
+# Member phones reach the AVA PC over the LAN; stamp this machine's address
+# so the congregation QR overlay and /view page work from day one.
+LAN_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
+CV_URL=""; [ -n "$LAN_IP" ] && CV_URL="http://$LAN_IP"
+
 OVERRIDES="$INSTALL_DIR/AppData/AppSettingsOverrides.json"
 mkdir -p "$INSTALL_DIR/AppData"
 [ -f "$OVERRIDES" ] || echo '{}' > "$OVERRIDES"
@@ -289,10 +299,11 @@ jq \
   --argjson right "$RIGHT_ON" --argjson stream "$STREAM_ON" --argjson sync "$SYNC_ON" \
   --argjson haon "$HA_ON" --arg haurl "$HA_URL" \
   --argjson nvon "$NV_ON" --arg nvhost "$NV_HOST" \
+  --arg cvurl "$CV_URL" \
   --arg key "$KEY_JSON" --arg prayer "$PRAYER_ID" --arg ann "$ANN_ID" \
   --arg soffice "/usr/bin/soffice" --arg ffmpeg "/usr/bin/ffmpeg" \
   '
-    .Urls = "https://0.0.0.0:443;http://0.0.0.0:80"
+    .Urls = "https://localhost;http://0.0.0.0:80"
     | .Kestrel = { Certificates: { Default: { Path: $pfx, Password: $pass } } }
     | .Kiosk = ((.Kiosk // {}) + { BaseUrl: "https://localhost", Enabled: true,
                                    RightWallEnabled: $right, CgEnabled: $stream, ProgramEnabled: $stream })
@@ -307,9 +318,11 @@ jq \
     | .Broadcast = ((.Broadcast // {}) + { FFmpegPath: $ffmpeg })
     | .HomeAssistant = ((.HomeAssistant // {}) + { Enabled: $haon } + (if $haurl != "" then { BaseUrl: $haurl } else {} end))
     | .Novastar = ((.Novastar // {}) + { Enabled: $nvon } + (if $nvon then { Host: $nvhost } else {} end))
+    | .CongregationView = ((.CongregationView // {}) + (if $cvurl != "" then { BaseUrl: $cvurl } else {} end))
   ' "$OVERRIDES" > "$OVERRIDES.tmp" && mv "$OVERRIDES.tmp" "$OVERRIDES"
 chown "$HUMAN_USER:$HUMAN_USER" "$OVERRIDES"
 echo "  Dependency paths stamped: LibreOffice='/usr/bin/soffice' FFmpeg='/usr/bin/ffmpeg'"
+[ -n "$CV_URL" ] && echo "  Congregation phones will reach this PC at $CV_URL (QR overlay + /view page)."
 
 # ----------------------------- [9/9] HELPERS, SHORTCUTS, NETWORK ------------
 echo -e "\n==> [9/9] Writing shortcuts, configuring firewall, and keeping the PC awake..."
@@ -377,6 +390,7 @@ echo "   Auto sign-in  : $([ "$AUTO_LOGIN_ON" = true ] && echo 'configured' || e
 echo "   Right Display : $RIGHT_ON   Streaming: $STREAM_ON   Drive sync: $SYNC_ON"
 echo "   Home Assistant: $([ "$HA_ON" = true ] && echo "$HA_URL" || echo 'off')   Novastar: $([ "$NV_ON" = true ] && echo "$NV_HOST" || echo 'off')"
 echo "   Portal        : $PORTAL_URL"
+[ -n "$CV_URL" ] && echo "   Phones        : $CV_URL (QR overlay + /view page)"
 echo ""
 if [ "$AUTO_LOGIN_ON" = true ]; then
     echo "   Auto sign-in takes effect the next time this PC restarts - for example"
