@@ -1,11 +1,14 @@
 <#
-    Illumina AVA PC Installer - Windows 10/11 (v7.1 FINAL)
-    - Friendly administrator check (reassures nothing was changed)
-    - Surgical process handling (leaves personal Chrome alone)
-    - Clean [1]/[2] menu for account selection with smart Standard-user detection
-    - Auto sign-in activates at the next restart; no reboot is demanded
-    - Content folders are permission-locked and hidden quietly (security-by-obscurity)
-    - Minimal helpers: everyday icon starts the app; Restart icon relaunches
+    Illumina AVA PC Installer - Windows 10/11 (v8.0 FINAL)
+    - Friendly administrator check; nothing changes before it passes
+    - Provisions media engines from the internet: LibreOffice (slides),
+      FFmpeg (broadcast), and Chrome itself if missing (winget)
+    - Resolved dependency paths are stamped into the per-machine overrides
+      layer (AppData/AppSettingsOverrides.json) - the checked-in
+      appsettings.json always stays universal and untouched
+    - Clean [1]/[2] kiosk-account menu; surgical process handling (personal
+      Chrome never touched); conditional, warm reboot guidance
+    - Content folders permission-locked and hidden quietly
     - HTTPS via a private 100-year certificate in the machine store
 #>
 $ErrorActionPreference = "Stop"
@@ -19,13 +22,24 @@ $MachineDir  = "C:\ProgramData\Illumina"   # update-surviving machine store
 $HttpPort    = "443"
 $PortalUrl   = "https://localhost"
 $TokenFile   = "$MachineDir\github-token"
+$SofficePath = "C:\Program Files\LibreOffice\program\soffice.exe"
+$FfmpegPath  = "C:\ffmpeg\ffmpeg.exe"
 $LogonDelaySeconds     = 12
 $AutoOpenPortalAtLogon = $true
 # ----------------------------------------------------------------------------
 
 function Log($m) { Write-Host "`n==> $m" -ForegroundColor Green }
 
-# ---------------- [0/8] Administrator check ---------------------------------
+function Resolve-Chrome {
+    foreach ($c in @("C:\Program Files\Google\Chrome\Application\chrome.exe",
+                     "C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+                     "$env:LOCALAPPDATA\Google\Chrome\Application\chrome.exe")) { if (Test-Path $c) { return $c } }
+    $ap = Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe" -ErrorAction SilentlyContinue
+    if ($ap -and $ap.'(default)' -and (Test-Path $ap.'(default)')) { return $ap.'(default)' }
+    return $null
+}
+
+# ---------------- [0/9] Administrator check ---------------------------------
 $identity  = [Security.Principal.WindowsIdentity]::GetCurrent()
 $principal = New-Object Security.Principal.WindowsPrincipal($identity)
 if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
@@ -41,17 +55,18 @@ if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administra
 }
 
 Write-Host "==================================================" -ForegroundColor Cyan
-Write-Host "   Illumina AVA PC Installer - Windows (v7.1)     " -ForegroundColor Cyan
+Write-Host "   Illumina AVA PC Installer - Windows (v8.0)     " -ForegroundColor Cyan
 Write-Host "   Guided setup for a safe, self-starting kiosk   " -ForegroundColor Cyan
 Write-Host "==================================================" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "  Welcome! This installer prepares this PC to run Illumina around the"
-Write-Host "  clock: it fetches the latest release, configures secure local HTTPS,"
-Write-Host "  and tailors the displays to your hardware. Every question explains"
-Write-Host "  itself, and pressing ENTER always accepts the safe, recommended default."
+Write-Host "  clock: it fetches the latest release and the media engines it needs,"
+Write-Host "  configures secure local HTTPS, and tailors the displays to your"
+Write-Host "  hardware. Every question explains itself, and pressing ENTER always"
+Write-Host "  accepts the safe, recommended default."
 
-# ---------------- [1/8] GitHub token ----------------------------------------
-Log "[1/8] Release access token..."
+# ---------------- [1/9] GitHub token ----------------------------------------
+Log "[1/9] Release access token..."
 New-Item -ItemType Directory -Path $MachineDir -Force | Out-Null
 if ($env:GITHUB_TOKEN) { $Token = $env:GITHUB_TOKEN; Log "Using the token from this session's environment." }
 elseif (Test-Path $TokenFile) { $Token = (Get-Content $TokenFile -Raw).Trim(); Log "Reusing the token stored on this machine - nothing to type." }
@@ -66,8 +81,8 @@ else {
 }
 $Api = @{ Authorization = "Bearer $Token"; Accept = "application/vnd.github+json" }
 
-# ---------------- [2/8] Latest release asset --------------------------------
-Log "[2/8] Downloading the latest Illumina release..."
+# ---------------- [2/9] Latest release asset --------------------------------
+Log "[2/9] Downloading the latest Illumina release..."
 try { $Release = Invoke-RestMethod -Uri "https://api.github.com/repos/$GitHubOwner/$GitHubRepo/releases/latest" -Headers $Api }
 catch { throw "Could not reach the release repository. Check the token and internet connection. $_" }
 $Asset = $Release.assets | Where-Object { $_.name -eq $AssetName } | Select-Object -First 1
@@ -76,8 +91,47 @@ $Zip = Join-Path $env:TEMP $AssetName
 Invoke-WebRequest -Uri $Asset.url -Headers @{ Authorization = "Bearer $Token"; Accept = "application/octet-stream" } -OutFile $Zip
 Log "Release $($Release.tag_name) downloaded."
 
-# ---------------- [3/8] Pause previous session ------------------------------
-Log "[3/8] Pausing any running Illumina session..."
+# ---------------- [3/9] Media engines & browser -----------------------------
+Log "[3/9] Provisioning media engines and the display browser..."
+Write-Host "  Illumina relies on three companions: LibreOffice (converts slide"
+Write-Host "  decks), FFmpeg (remuxes the broadcast feed), and Chrome (renders every"
+Write-Host "  display). Anything missing is installed now, straight from the internet."
+
+if (Test-Path $SofficePath) { Log "LibreOffice already present." }
+else {
+    Log "Installing LibreOffice..."
+    if (Get-Command winget -ErrorAction SilentlyContinue) {
+        winget install --id TheDocumentFoundation.LibreOffice -e --accept-source-agreements --accept-package-agreements --silent | Out-Null
+        if (Test-Path $SofficePath) { Log "LibreOffice installed." } else { Write-Warning "  LibreOffice install could not be verified - install it manually if slides must convert." }
+    } else { Write-Warning "  winget not available on this PC - please install LibreOffice manually after setup." }
+}
+
+if (Test-Path $FfmpegPath) { Log "FFmpeg already present." }
+else {
+    Log "Installing FFmpeg..."
+    $ffmpegZip = "$env:TEMP\ffmpeg-release.zip"; $ffmpegOut = "$env:TEMP\ffmpeg-extract"
+    try {
+        New-Item -ItemType Directory -Path "C:\ffmpeg" -Force | Out-Null
+        Invoke-WebRequest -Uri "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip" -OutFile $ffmpegZip -UseBasicParsing
+        Expand-Archive -Path $ffmpegZip -DestinationPath $ffmpegOut -Force
+        $found = Get-ChildItem $ffmpegOut -Recurse -Filter "ffmpeg.exe" | Select-Object -First 1
+        if ($found) { Move-Item $found.FullName $FfmpegPath -Force; Log "FFmpeg installed to C:\ffmpeg." }
+    } catch { Write-Warning "  FFmpeg download failed - place ffmpeg.exe in C:\ffmpeg manually if broadcasting is needed." }
+    finally { Remove-Item $ffmpegZip, $ffmpegOut -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
+$ChromeExe = Resolve-Chrome
+if (-not $ChromeExe) {
+    Log "Chrome not found - installing it..."
+    if (Get-Command winget -ErrorAction SilentlyContinue) {
+        winget install --id Google.Chrome -e --accept-source-agreements --accept-package-agreements --silent | Out-Null
+        $ChromeExe = Resolve-Chrome
+    }
+}
+if ($ChromeExe) { Log "Chrome ready at $ChromeExe" } else { Write-Warning "  Chrome could not be installed - the portal will fall back to the default browser." }
+
+# ---------------- [4/9] Pause previous session ------------------------------
+Log "[4/9] Pausing any running Illumina session..."
 Get-Process -Name Illumina -ErrorAction SilentlyContinue | Stop-Process -Force
 # Only Chrome windows that belong to Illumina's own kiosk profiles - never
 # the operator's personal browser tabs.
@@ -89,8 +143,8 @@ Get-ChildItem "C:\Users\*\AppData\Local\Temp\IlluminaKiosk" -Directory -ErrorAct
     Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
 Log "Previous session paused - your open browser tabs and files are untouched."
 
-# ---------------- [4/8] Kiosk account & sign-in -----------------------------
-Log "[4/8] Choosing the kiosk account and sign-in behavior..."
+# ---------------- [5/9] Kiosk account & sign-in -----------------------------
+Log "[5/9] Choosing the kiosk account and sign-in behavior..."
 Write-Host ""
 
 $interactiveUser = $env:USERNAME
@@ -127,7 +181,6 @@ function Read-NewPassword([string]$what) {
     if ($p1 -ne $p2) { throw "The two passwords did not match - nothing was changed. Please re-run the installer." }
     return $p1
 }
-
 function Set-AutoLogin([string]$user, [string]$pass) {
     Set-ItemProperty $Winlogon "AutoAdminLogon"    "1"               -Type String
     Set-ItemProperty $Winlogon "DefaultUserName"   $user             -Type String
@@ -140,7 +193,6 @@ function Clear-AutoLogin {
 }
 
 $autoLoginOn = $false
-
 if ($useAvaUser) {
     $HumanUser = "avauser"
     $existing  = Get-LocalUser -Name $HumanUser -ErrorAction SilentlyContinue
@@ -195,8 +247,8 @@ else {
     }
 }
 
-# ---------------- [5/8] App files + content folders -------------------------
-Log "[5/8] Installing Illumina and preparing its content folders..."
+# ---------------- [6/9] App files + content folders -------------------------
+Log "[6/9] Installing Illumina and preparing its content folders..."
 $Backup = $null
 if (Test-Path "$InstallDir\Data") { $Backup = Join-Path $env:TEMP "illumina-data-backup"; Move-Item "$InstallDir\Data" $Backup -Force }
 if (Test-Path $InstallDir) { Remove-Item $InstallDir -Recurse -Force }
@@ -221,8 +273,8 @@ attrib +s +h "$InstallDir\Data" | Out-Null
 Log "Content folders prepared with this machine's recommended permissions."
 Set-Content "$MachineDir\current-version" $Release.tag_name
 
-# ---------------- [6/8] Survey + certificate + machine config ---------------
-Log "[6/8] Site survey, HTTPS certificate, and machine settings..."
+# ---------------- [7/9] Survey + certificate + machine config ---------------
+Log "[7/9] Site survey, HTTPS certificate, and machine settings..."
 Write-Host ""
 Write-Host "  Every church is wired differently, so we ask three quick questions."
 Write-Host "  ENTER accepts the safe default (No) for each, and everything here can"
@@ -276,6 +328,7 @@ if (-not $cert) {
     Log "Certificate created and trusted for this machine."
 } else { Log "Reusing this machine's existing HTTPS certificate." }
 
+# ---- Stamp machine truth into the overrides layer (merge, never clobber) ----
 $overridesPath = "$InstallDir\AppData\AppSettingsOverrides.json"
 if (Test-Path $overridesPath) { $obj = Get-Content $overridesPath -Raw | ConvertFrom-Json }
 else { $obj = [PSCustomObject]@{} }
@@ -295,8 +348,12 @@ $k | Add-Member -NotePropertyName "CgEnabled"        -NotePropertyValue $streamO
 $k | Add-Member -NotePropertyName "ProgramEnabled"   -NotePropertyValue $streamOn     -Force
 if (-not $streamOn) { $k | Add-Member -NotePropertyName "CgConfidenceMonitorEnabled" -NotePropertyValue $false -Force }
 
+# Dependency paths: resolved on THIS machine, stamped for the app to consume.
+$sofficeResolved = if (Test-Path $SofficePath) { $SofficePath } else { "" }
+$ffmpegResolved  = if (Test-Path $FfmpegPath)  { $FfmpegPath }  else { "" }
 if ($obj.PSObject.Properties.Name -notcontains "SlideLibrary") { $obj | Add-Member -NotePropertyName "SlideLibrary" -NotePropertyValue ([PSCustomObject]@{}) }
 $sl = $obj.SlideLibrary
+$sl | Add-Member -NotePropertyName "LibreOfficePath" -NotePropertyValue $sofficeResolved -Force
 if ($sl.PSObject.Properties.Name -notcontains "GoogleDrive") { $sl | Add-Member -NotePropertyName "GoogleDrive" -NotePropertyValue ([PSCustomObject]@{}) }
 $gd = $sl.GoogleDrive
 if ($syncOn) {
@@ -310,29 +367,23 @@ if ($syncOn) {
     $gd | Add-Member -NotePropertyName "AnnouncementsFolderId" -NotePropertyValue "" -Force
     Log "Drive sync left OFF on this machine."
 }
+if ($obj.PSObject.Properties.Name -notcontains "Broadcast") { $obj | Add-Member -NotePropertyName "Broadcast" -NotePropertyValue ([PSCustomObject]@{}) }
+$obj.Broadcast | Add-Member -NotePropertyName "FFmpegPath" -NotePropertyValue $ffmpegResolved -Force
+Log "Dependency paths stamped: LibreOffice='$sofficeResolved' FFmpeg='$ffmpegResolved'"
 $obj | ConvertTo-Json -Depth 10 | Set-Content $overridesPath
 
-# ---------------- [7/8] Helpers + shortcuts ---------------------------------
+# ---------------- [8/9] Helpers + shortcuts ---------------------------------
 $portalAtLogon = $autoLoginOn -and $AutoOpenPortalAtLogon
 Log $(if ($portalAtLogon) { "Logon behavior: app + portal open automatically (true kiosk boot)." }
       else { "Logon behavior: app starts silently at logon; the desktop icon opens the portal." })
 
-function Resolve-Chrome {
-    foreach ($c in @("C:\Program Files\Google\Chrome\Application\chrome.exe",
-                     "C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
-                     "$env:LOCALAPPDATA\Google\Chrome\Application\chrome.exe")) { if (Test-Path $c) { return $c } }
-    $ap = Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe" -ErrorAction SilentlyContinue
-    if ($ap -and $ap.'(default)' -and (Test-Path $ap.'(default)')) { return $ap.'(default)' }
-    return $null
-}
-$ChromeExe = Resolve-Chrome
-if (-not $ChromeExe) { Write-Warning "Chrome not found - the portal will open in the default browser." }
+# --app= gives the portal its own dedicated window (never swallowed as a tab
+# by a personal Chrome), with a clean title the positioner can recognize.
 $PortalLine = if ($ChromeExe) { "Start-Process '$ChromeExe' -ArgumentList '--app=$PortalUrl'" } else { "Start-Process '$PortalUrl'" }
 
-Log "[7/8] Writing the everyday shortcuts..."
+Log "[8/9] Writing the everyday shortcuts..."
 $AppExe = "$InstallDir\Illumina.exe"
 
-# Everyday icon: start the app if it isn't running, then open the portal.
 $open = @'
 param([int]$DelaySeconds = 0, [switch]$NoPortal)
 if ($DelaySeconds -gt 0) { Start-Sleep -Seconds $DelaySeconds }
@@ -346,7 +397,6 @@ if (-not $NoPortal) { __PORTAL__ }
 $open = $open -replace '__APP__', $AppExe -replace '__PORTAL__', $PortalLine
 Set-Content "$InstallDir\open-illumina.ps1" $open
 
-# Restart icon: tears down and relaunches Illumina + kiosk Chrome only.
 $restart = @'
 Get-Process -Name Illumina -ErrorAction SilentlyContinue | Stop-Process -Force
 Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" -ErrorAction SilentlyContinue |
@@ -406,8 +456,8 @@ $a.Arguments  = "-ExecutionPolicy Bypass -WindowStyle Hidden -File `"$InstallDir
 $a.Save()
 Log "Shortcuts placed for $HumanUser - 'Illumina' (everyday) and 'Restart Illumina' (recovery)."
 
-# ---------------- [8/8] Network, power, summary -----------------------------
-Log "[8/8] Opening the network doors and keeping the PC awake..."
+# ---------------- [9/9] Network, power, summary -----------------------------
+Log "[9/9] Opening the network doors and keeping the PC awake..."
 Remove-NetFirewallRule -DisplayName "Illumina Web App"      -ErrorAction SilentlyContinue
 Remove-NetFirewallRule -DisplayName "Illumina Phones HTTP" -ErrorAction SilentlyContinue
 New-NetFirewallRule -DisplayName "Illumina Web App"      -Direction Inbound -LocalPort $HttpPort -Protocol TCP -Action Allow | Out-Null
