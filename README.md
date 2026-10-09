@@ -12,7 +12,7 @@ Please select your target operating system below.
 
 ### Prerequisites
 * A PC running Windows 10 or 11.
-* Google Chrome installed.
+* An active internet connection (required to fetch the app and its dependencies).
 * Local Administrator privileges for the initial setup.
 * Your GitHub Read-Only Token (provided by your IT administrator).
 * *Note: Ensure IIS or other local web servers are not actively binding to port 443.*
@@ -100,7 +100,7 @@ Simply re-run the **exact same installation command** (from Step 2 above) for yo
 ## 🛡️ Architecture & Security Posture
 
 * **Principle of Least Privilege:** When deployed in Kiosk Mode, the application runs under a strictly confined Standard User account. This prevents unauthorized system modifications, accidental software installations, and protects the OS integrity.
-* **Automated Dependency Provisioning:** The installer automatically detects and provisions required media engines (LibreOffice for slide rendering, FFmpeg for broadcast encoding). IT administrators do not need to manually hunt for, download, or configure third-party binaries.
+* **Automated Dependency Provisioning:** The installer automatically detects and provisions all required companion software: Google Chrome (the display rendering engine), LibreOffice (for slide conversion), and FFmpeg (for broadcast encoding). IT administrators do not need to manually hunt for, download, or configure third-party binaries.
 * **Native Content Security:** Proprietary media assets and application libraries are secured using native OS-level permissions (Windows ACLs / Linux POSIX `chmod`). Content is strictly isolated and inaccessible to unauthorized user profiles or external browsing.
 * **Closed-Source Delivery:** The deployment pipeline fetches only the compiled, production-ready binaries. Source code and development artifacts are never exposed to the endpoint machine.
 * **Automated Cryptography:** The installer automatically generates and trusts a private, machine-local HTTPS certificate, ensuring encrypted local traffic without relying on external certificate authorities or exposing the portal to the public internet.
