@@ -431,7 +431,7 @@ echo "   Auto sign-in  : $([ "$AUTO_LOGIN_ON" = true ] && echo 'configured' || e
 echo "   Right Display : $RIGHT_ON   Streaming: $STREAM_ON   Drive sync: $SYNC_ON"
 echo "   Home Assistant: $([ "$HA_ON" = true ] && echo "$HA_URL" || echo 'off')   Novastar: $([ "$NV_ON" = true ] && echo "$NV_HOST" || echo 'off')"
 echo ""
-echo "  🎉 You are all set! Here is how to start your first session:"
+echo "  Congratulations! You are all set! Here is how to start your first session:"
 echo ""
 echo "   1. RESTART this PC (or click 'Restart Illumina Backend'"
 echo "      on the desktop). This starts the engine in the background."
