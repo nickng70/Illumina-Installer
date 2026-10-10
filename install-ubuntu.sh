@@ -6,12 +6,14 @@
 #   (official .deb) if missing
 # - Five-question survey incl. Home Assistant (optional Docker install here,
 #   where it is officially supported) and Novastar
+# - Patches the INSTALLED appsettings.json with the PFX Kestrel block when
+#   the release zip predates it (parse-free text insert to survive comments)
+# - Grants the kiosk user read access to the GitHub token for in-app updates
 # - Binding contract per AGENTS.md: HTTPS localhost-only + HTTP on all
 #   interfaces; congregation QR BaseUrl auto-stamped from the LAN address
 # - Resolved dependency paths + integration settings stamped into the
 #   per-machine overrides layer (merge, never clobber)
 # - Clean [1]/[2] kiosk-account menu; GDM3 auto sign-in; ufw; sleep masked
-# - HTTPS via a private 100-year PFX + system CA trust for a clean padlock
 # ==============================================================================
 set -e
 
@@ -161,6 +163,14 @@ else
     if [[ "$WANT_AUTO" =~ ^[yY]$ ]]; then AUTO_LOGIN_ON=true; echo "  Auto sign-in enabled for $HUMAN_USER."; fi
 fi
 
+# Grant the kiosk account read access to the GitHub token so the in-app
+# UpdateService can fetch manifests and content updates from the private repo.
+if [ -f "$TOKEN_FILE" ]; then
+    chown root:"$HUMAN_USER" "$TOKEN_FILE"
+    chmod 640 "$TOKEN_FILE"
+    echo "  Granted read access to the GitHub token for $HUMAN_USER."
+fi
+
 GDM_CONF="/etc/gdm3/custom.conf"
 if [ "$AUTO_LOGIN_ON" = true ] && [ -f "$GDM_CONF" ]; then
     if grep -q "^AutomaticLoginEnable" "$GDM_CONF"; then
@@ -285,6 +295,16 @@ rm -f /tmp/illumina.key /tmp/illumina.crt
 chown "$HUMAN_USER:$HUMAN_USER" "$PFX_PATH"; chmod 400 "$PFX_PATH"
 echo "  Certificate created, trusted system-wide, and ready for Kestrel."
 
+# Belt-and-braces: Kestrel binds at host start, BEFORE the overrides layer
+# loads, so the PFX path must exist in appsettings.json itself.
+# PARSE-FREE ON PURPOSE: appsettings.json legitimately carries // comments
+# and trailing commas that jq rejects. Insert the block as plain text only
+# when missing.
+if ! grep -q '"Kestrel"' "$INSTALL_DIR/appsettings.json"; then
+    sed -i "0,/^\s*{/s/^\s*{/{\n  \"Kestrel\": {\n    \"Certificates\": {\n      \"Default\": {\n        \"Path\": \"$PFX_PATH\",\n        \"Password\": \"$PFX_PASS\"\n      }\n    }\n  },/" "$INSTALL_DIR/appsettings.json"
+    echo "  Patched appsettings.json with the HTTPS certificate path (text insert)."
+fi
+
 # Member phones reach the AVA PC over the LAN; stamp this machine's address
 # so the congregation QR overlay and /view page work from day one.
 LAN_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
@@ -294,8 +314,8 @@ OVERRIDES="$INSTALL_DIR/AppData/AppSettingsOverrides.json"
 mkdir -p "$INSTALL_DIR/AppData"
 [ -f "$OVERRIDES" ] || echo '{}' > "$OVERRIDES"
 # Merge (never clobber): existing Settings-saved values survive re-installs.
+# NOTE: Kestrel is handled in appsettings.json above, NOT here.
 jq \
-  --arg pfx "$PFX_PATH" --arg pass "$PFX_PASS" \
   --argjson right "$RIGHT_ON" --argjson stream "$STREAM_ON" --argjson sync "$SYNC_ON" \
   --argjson haon "$HA_ON" --arg haurl "$HA_URL" \
   --argjson nvon "$NV_ON" --arg nvhost "$NV_HOST" \
@@ -304,7 +324,6 @@ jq \
   --arg soffice "/usr/bin/soffice" --arg ffmpeg "/usr/bin/ffmpeg" \
   '
     .Urls = "https://localhost;http://0.0.0.0:80"
-    | .Kestrel = { Certificates: { Default: { Path: $pfx, Password: $pass } } }
     | .Kiosk = ((.Kiosk // {}) + { BaseUrl: "https://localhost", Enabled: true,
                                    RightWallEnabled: $right, CgEnabled: $stream, ProgramEnabled: $stream })
     | (if $stream then . else .Kiosk.CgConfidenceMonitorEnabled = false end)
