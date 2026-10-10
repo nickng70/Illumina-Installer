@@ -268,28 +268,32 @@ if ($Backup) {
 }
 New-Item -ItemType Directory -Path "$InstallDir\Data" -Force | Out-Null
 
-# Belt-and-braces: Kestrel binds HTTPS at host start, BEFORE the overrides
-# layer loads, so the certificate config must exist in appsettings.json
-# itself. Release zips published before the store-based block existed would
-# otherwise brick fresh PCs (no dev certificate to fall back to there).
-# Patched in only when missing - never clobber a repo-shipped/custom block.
+# Belt-and-braces: Kestrel binds at host start, BEFORE the overrides layer
+# loads, so the certificate config must exist in appsettings.json itself.
+# PARSE-FREE ON PURPOSE: appsettings.json legitimately carries // comments
+# and trailing commas - .NET's config reader accepts them, but Windows
+# PowerShell 5.1's ConvertFrom-Json (and jq) do not; parsing it here crashed
+# v8.0 installs at [6/9]. Insert the block as plain text only when missing.
 $appSettingsPath = "$InstallDir\appsettings.json"
-$asObj = Get-Content $appSettingsPath -Raw | ConvertFrom-Json
-if ($asObj.PSObject.Properties.Name -notcontains "Kestrel") {
-    $asObj | Add-Member -NotePropertyName "Kestrel" -NotePropertyValue ([PSCustomObject]@{
-        Certificates = [PSCustomObject]@{
-            Default = [PSCustomObject]@{
-                Subject      = "localhost"
-                Store        = "My"
-                Location     = "LocalMachine"
-                AllowInvalid = $true
-            }
-        }
-    })
-    $asObj | ConvertTo-Json -Depth 12 | Set-Content $appSettingsPath
-    Log "Patched appsettings.json with the machine-store HTTPS certificate block."
-} else {
-    Log "appsettings.json already carries a Kestrel certificate block - left untouched."
+$raw = Get-Content $appSettingsPath -Raw
+if ($raw -notmatch '"Kestrel"') {
+    $kestrelBlock = @"
+
+  "Kestrel": {
+    "Certificates": {
+      "Default": {
+        "Subject": "localhost",
+        "Store": "My",
+        "Location": "LocalMachine",
+        "AllowInvalid": true
+      }
+    }
+  },
+"@
+    $idx = $raw.IndexOf('{')
+    $raw = $raw.Insert($idx + 1, $kestrelBlock)
+    Set-Content -Path $appSettingsPath -Value $raw -Encoding UTF8
+    Log "Patched appsettings.json with the machine-store HTTPS certificate block (text insert, no JSON parsing)."
 }
 
 foreach ($w in @("SlideContent", "MediaContent", "AppData", "Recordings")) {
