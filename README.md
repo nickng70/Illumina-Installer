@@ -33,9 +33,6 @@ Before running the installer, plan your physical deployment and network topology
 * **Localhost only (port 443, HTTPS):** the operator portal is served securely on this PC alone.
 * **Internet access:** Google Drive slide sync, YouTube/Twitch RTMP egress, and first-run dependency provisioning.
 
-### A Note on Naming (for IT Administrators)
-All user-facing labels use the modern, device-agnostic term **Display** (Left Display, Right Display). Internal configuration keys retain their legacy names (`Kiosk:LeftWall`, `Kiosk:RightWallEnabled`, …) for backwards compatibility with already-deployed churches — edit overrides using the legacy keys; everything you *see* will say Display.
-
 ---
 
 ## 🪟 Option A: Windows 10 / 11 Deployment
