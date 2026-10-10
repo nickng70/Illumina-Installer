@@ -4,20 +4,21 @@
     - Provisions media engines from the internet: LibreOffice (slides),
       FFmpeg (broadcast), and Chrome itself if missing (winget)
     - Five-question survey (Right Display / Streaming / Drive sync /
-      Home Assistant / Novastar); ENTER = No everywhere
+      device automation / Novastar); ENTER = No everywhere
     - Home Assistant: detect first, then address; Windows gets honest
       guidance (HA is officially Linux/VM/appliance territory)
     - Patches the INSTALLED appsettings.json with the machine-store Kestrel
       block when the release zip predates it (parse-free text insert)
     - Creates + trusts a private 100-year machine certificate and asserts
-      the private key ACL so the AVA PC account can read it (prevents
-      ERR_CONNECTION_CLOSED on fresh PCs)
+      the private-key ACL via the key FILE's ACL (works on Windows
+      PowerShell 5.1, whose .NET Framework CngKey has no GetAccessControl -
+      prevents ERR_CONNECTION_CLOSED on fresh PCs and on re-installs)
     - Binding contract per AGENTS.md: HTTPS localhost-only + HTTP on all
       interfaces for congregation phones; QR BaseUrl auto-stamped
     - Clean [1]/[2] AVA PC account menu; surgical process handling
     - Content folders permission-locked and hidden quietly
-    - Human-facing labels use "Display"; internal config keys keep their
-      legacy names for backwards compatibility with deployed churches
+    - Human-facing labels use "Display" and "Sabbath"; internal config keys
+      keep their legacy names for backwards compatibility
 #>
 $ErrorActionPreference = "Stop"
 
@@ -168,7 +169,7 @@ Write-Host ""
 Write-Host "  [1] Dedicated AVA PC Account (Recommended)"
 Write-Host "      Creates a clean, standard-user account named 'avauser' just for Illumina."
 Write-Host "      This keeps the desktop uncluttered, prevents accidental system changes,"
-Write-Host "      and provides the safest environment for Sunday services."
+Write-Host "      and provides the safest environment for Sabbath services."
 Write-Host ""
 Write-Host "  [2] Run Illumina using $interactiveUser"
 Write-Host "      Uses your current Windows account ($interactiveUser)."
@@ -244,7 +245,7 @@ else {
     }
     Write-Host ""
     Write-Host "  Auto sign-in lets the PC boot straight into Illumina after a power cut - no"
-    Write-Host "  volunteer needs to type a password on Sunday morning. On a personal laptop"
+    Write-Host "  volunteer needs to type a password on Sabbath morning. On a personal laptop"
     Write-Host "  you may prefer the normal logon screen instead."
     if ($autoOnNow) { Write-Host "  (Auto sign-in is currently enabled for '$autoUserNow'.)" }
     $want = Read-Host "  Enable auto sign-in for $HumanUser on this PC? [y/N] (ENTER = No; any existing auto sign-in is then turned off)"
@@ -328,7 +329,9 @@ $sync      = Read-Host "  [3/5] Should Prayer/Announcement slides sync from Goog
 Write-Host ""
 Write-Host "  Illumina can also talk to the smart hardware many churches already own."
 Write-Host "  Both integrations are optional and can be switched on later in Settings."
-$haUse       = Read-Host "  [4/5] Do you automate AV devices (e.g. Tapo smart switches for wall and rack power) through Home Assistant? [y/N] (ENTER = No)"
+Write-Host "  Device control runs through Home Assistant; LED brightness schedules and"
+Write-Host "  cabinet health through the Novastar controller."
+$haUse       = Read-Host "  [4/5] Automatically control devices (e.g. Tapo smart plugs to power off/on LED walls)? [y/N] (ENTER = No)"
 $novastarUse = Read-Host "  [5/5] Is a Novastar LED video controller on the local network (brightness schedules + cabinet health)? [y/N] (ENTER = No)"
 $rightWallOn = ($rightWall -match '^[yY]')
 $streamOn    = ($streaming -match '^[yY]')
@@ -407,23 +410,32 @@ if (-not $cert) {
     Log "Certificate created and trusted for this machine."
 } else { Log "Reusing this machine's existing HTTPS certificate." }
 
-# ALWAYS (re)assert the private-key ACL. 
-# On re-installs the cert is REUSED, so a grant placed inside the creation 
-# branch silently never runs. A standard account that can't read the CNG key 
-# aborts every TLS handshake (Chrome: ERR_CONNECTION_CLOSED; netstat fills 
-# with loopback TIME_WAITs). 'Users' ensures whichever account runs the 
-# app (avauser, standard admin) can read the key.
+# ALWAYS (re)assert private-key read access for local users. On re-installs
+# the cert is REUSED, so a grant placed inside the creation branch silently
+# never runs - and an account that can't read the key aborts every TLS
+# handshake (Chrome: ERR_CONNECTION_CLOSED; netstat fills with loopback
+# TIME_WAITs).
+#
+# HOW: the Software Key Storage Provider keeps the key's security descriptor
+# as the ACL of a file under %ProgramData%\Microsoft\Crypto\Keys - the same
+# ACL the certificate MMC's "Manage Private Keys" dialog edits. We edit that
+# file directly because CngKey.GetAccessControl/SetAccessControl exist only
+# on .NET Core 3.0+ (PowerShell 7); Windows PowerShell 5.1's .NET Framework
+# CngKey has no such methods. The SID form (*S-1-5-32-545 = Users) is used so
+# localized Windows names can't break the grant.
 try {
-    $rsa    = [System.Security.Cryptography.X509Certificates.RSACertificateExtensions]::GetRSAPrivateKey($cert)
-    $keyAcl = $rsa.Key.GetAccessControl()
-    $rule   = New-Object System.Security.Cryptography.AccessControl.CngKeyAccessRule(
-        'Users',
-        [System.Security.Cryptography.AccessControl.CngKeyRights]::Read,
-        [System.Security.Cryptography.AccessControl.AccessControlType]::Allow
-    )
-    $keyAcl.AddAccessRule($rule)
-    $rsa.Key.SetAccessControl($keyAcl)
-    Log "Certificate private key ACL asserted (readable by the AVA PC account)."
+    $rsa        = [System.Security.Cryptography.X509Certificates.RSACertificateExtensions]::GetRSAPrivateKey($cert)
+    $uniqueName = $rsa.Key.UniqueName
+    $keyFile    = @(
+        (Join-Path $env:ProgramData "Microsoft\Crypto\Keys\$uniqueName"),
+        (Join-Path $env:ProgramData "Microsoft\Crypto\SystemKeys\$uniqueName")
+    ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+    if ($keyFile) {
+        icacls $keyFile /grant "*S-1-5-32-545:(R)" | Out-Null
+        Log "Certificate private key readable by local users (key-file ACL asserted)."
+    } else {
+        Write-Warning "  Private key file for '$uniqueName' not found in the machine key store - if the portal shows ERR_CONNECTION_CLOSED, grant 'Users' Read on it manually."
+    }
 } catch {
     Write-Warning "  Could not adjust the certificate key ACL: $_"
 }
