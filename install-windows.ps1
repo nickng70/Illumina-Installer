@@ -528,7 +528,19 @@ if (-not (Get-Process -Name Illumina -ErrorAction SilentlyContinue)) {
     Start-Process $app -WorkingDirectory (Split-Path $app) -WindowStyle Hidden
     Start-Sleep -Seconds 6
 }
-if (-not $NoPortal) { __PORTAL__ }
+if (-not $NoPortal) { 
+    __PORTAL__
+    
+    # The backend detects this portal and launches the fullscreen kiosk 
+    # windows a few seconds later. Those kiosk windows can steal focus or 
+    # cover the portal. We wait for them to settle, then explicitly bring 
+    # the main portal back to the front.
+    Start-Sleep -Seconds 8
+    $wshell = New-Object -ComObject wscript.shell
+    # The main portal's <PageTitle> is exactly "Illumina" (no suffix)
+    $portal = Get-Process chrome -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowTitle -eq 'Illumina' } | Select-Object -First 1
+    if ($portal) { $wshell.AppActivate($portal.Id) | Out-Null }
+}
 '@
 $open = $open -replace '__APP__', $AppExe -replace '__PORTAL__', $PortalLine
 Set-Content "$InstallDir\open-illumina.ps1" $open
