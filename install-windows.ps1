@@ -526,7 +526,11 @@ if ($DelaySeconds -gt 0) { Start-Sleep -Seconds $DelaySeconds }
 $app = "__APP__"
 if (-not (Get-Process -Name Illumina -ErrorAction SilentlyContinue)) {
     Start-Process $app -WorkingDirectory (Split-Path $app) -WindowStyle Hidden
-    Start-Sleep -Seconds 6
+    $sw = [Diagnostics.Stopwatch]::StartNew()
+    while ($sw.Elapsed.TotalSeconds -lt 30) {
+        try { $t = New-Object System.Net.Sockets.TcpClient; $t.Connect('127.0.0.1', 443); $t.Close(); break }
+        catch { Start-Sleep -Seconds 1 }
+    }    
 }
 if (-not $NoPortal) { 
     __PORTAL__
@@ -554,7 +558,11 @@ Start-Sleep -Seconds 2
 Remove-Item -Recurse -Force "$env:TEMP\IlluminaKiosk" -ErrorAction SilentlyContinue
 $app = "__APP__"
 Start-Process $app -WorkingDirectory (Split-Path $app) -WindowStyle Hidden
-Start-Sleep -Seconds 6
+$sw = [Diagnostics.Stopwatch]::StartNew()
+while ($sw.Elapsed.TotalSeconds -lt 30) {
+    try { $t = New-Object System.Net.Sockets.TcpClient; $t.Connect('127.0.0.1', 443); $t.Close(); break }
+    catch { Start-Sleep -Seconds 1 }
+}
 __PORTAL__
 '@
 $restart = $restart -replace '__APP__', $AppExe -replace '__PORTAL__', $PortalLine
