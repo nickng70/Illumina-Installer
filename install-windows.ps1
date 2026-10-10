@@ -4,19 +4,20 @@
     - Provisions media engines from the internet: LibreOffice (slides),
       FFmpeg (broadcast), and Chrome itself if missing (winget)
     - Five-question survey (Right Display / Streaming / Drive sync /
-      device automation / Novastar); ENTER = No everywhere
+      device automation / Novastar brightness); ENTER = No everywhere
     - Home Assistant: detect first, then address; Windows gets honest
       guidance (HA is officially Linux/VM/appliance territory)
     - Patches the INSTALLED appsettings.json with the machine-store Kestrel
       block when the release zip predates it (parse-free text insert)
     - Creates + trusts a private 100-year machine certificate and asserts
       the private-key ACL via the key FILE's ACL (works on Windows
-      PowerShell 5.1, whose .NET Framework CngKey has no GetAccessControl -
-      prevents ERR_CONNECTION_CLOSED on fresh PCs and on re-installs)
+      PowerShell 5.1, prevents ERR_CONNECTION_CLOSED)
     - Binding contract per AGENTS.md: HTTPS localhost-only + HTTP on all
       interfaces for congregation phones; QR BaseUrl auto-stamped
     - Clean [1]/[2] AVA PC account menu; surgical process handling
     - Content folders permission-locked and hidden quietly
+    - Simplified, bulletproof desktop shortcuts (Native Chrome portal +
+      Backend manager with friendly UI prompts)
     - Human-facing labels use "Display" and "Sabbath"; internal config keys
       keep their legacy names for backwards compatibility
 #>
@@ -33,8 +34,6 @@ $PortalUrl   = "https://localhost"
 $TokenFile   = "$MachineDir\github-token"
 $SofficePath = "C:\Program Files\LibreOffice\program\soffice.exe"
 $FfmpegPath  = "C:\ffmpeg\ffmpeg.exe"
-$LogonDelaySeconds     = 12
-$AutoOpenPortalAtLogon = $true
 # ----------------------------------------------------------------------------
 
 function Log($m) { Write-Host "`n==> $m" -ForegroundColor Green }
@@ -142,8 +141,6 @@ if ($ChromeExe) { Log "Chrome ready at $ChromeExe" } else { Write-Warning "  Chr
 # ---------------- [4/9] Pause previous session ------------------------------
 Log "[4/9] Pausing any running Illumina session..."
 Get-Process -Name Illumina -ErrorAction SilentlyContinue | Stop-Process -Force
-# Only Chrome windows that belong to Illumina's own dedicated profiles - never
-# the operator's personal browser tabs.
 Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" -ErrorAction SilentlyContinue |
     Where-Object { $_.CommandLine -like '*IlluminaKiosk*' } |
     ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
@@ -274,12 +271,6 @@ if ($Backup) {
 }
 New-Item -ItemType Directory -Path "$InstallDir\Data" -Force | Out-Null
 
-# Belt-and-braces: Kestrel binds at host start, BEFORE the overrides layer
-# loads, so the certificate config must exist in appsettings.json itself.
-# PARSE-FREE ON PURPOSE: appsettings.json legitimately carries // comments
-# and trailing commas - .NET's config reader accepts them, but Windows
-# PowerShell 5.1's ConvertFrom-Json (and jq) do not; parsing it here crashed
-# v8.0 installs at [6/9]. Insert the block as plain text only when missing.
 $appSettingsPath = "$InstallDir\appsettings.json"
 $raw = Get-Content $appSettingsPath -Raw
 if ($raw -notmatch '"Kestrel"') {
@@ -307,8 +298,6 @@ foreach ($w in @("SlideContent", "MediaContent", "AppData", "Recordings")) {
     New-Item -ItemType Directory -Path $p -Force | Out-Null
     icacls $p /grant "${HumanUser}:(OI)(CI)M" | Out-Null
 }
-# Content folders: readable by the AVA PC account and administrators only, and
-# marked as protected system files so they stay out of everyday view.
 icacls "$InstallDir\Data" /inheritance:r /grant:r "SYSTEM:(OI)(CI)F" "Administrators:(OI)(CI)F" "${HumanUser}:(OI)(CI)RX" | Out-Null
 attrib +s +h "$InstallDir\Data" | Out-Null
 Log "Content folders prepared with this machine's recommended permissions."
@@ -332,13 +321,12 @@ Write-Host "  Both integrations are optional and can be switched on later in Set
 Write-Host "  Device control runs through Home Assistant; LED brightness schedules and"
 Write-Host "  cabinet health through the Novastar controller."
 $haUse       = Read-Host "  [4/5] Automatically control devices (e.g. Tapo smart plugs to power off/on LED walls)? [y/N] (ENTER = No)"
-$novastarUse = Read-Host "  [5/5] Is a Novastar LED video controller on the local network (brightness schedules + cabinet health)? [y/N] (ENTER = No)"
+$novastarUse = Read-Host "  [5/5] Automatically control brightness on Novastar Video Controller? [y/N] (ENTER = No)"
 $rightWallOn = ($rightWall -match '^[yY]')
 $streamOn    = ($streaming -match '^[yY]')
 $syncOn      = ($sync -match '^[yY]')
 Log "Survey recorded - Right Display: $rightWallOn | Streaming: $streamOn | Drive sync: $syncOn"
 
-# ---- Google Drive key + folder IDs (only when sync was requested) ----
 $keyJson  = "$MachineDir\key.json"
 $prayerId = ""; $annId = ""
 if ($syncOn) {
@@ -365,7 +353,6 @@ if ($syncOn) {
     } else { $syncOn = $false; Log "No Drive key available, so Drive sync stays OFF on this machine." }
 }
 
-# ---- Home Assistant: detect first, then address (Windows guides, never hacks) ----
 $haOn = $false; $haUrl = ""
 if ($haUse -match '^[yY]') {
     try {
@@ -385,7 +372,6 @@ if ($haUse -match '^[yY]') {
     }
 }
 
-# ---- Novastar: configure, don't conquer (token pairing stays in the portal) ----
 $novastarOn = $false; $novastarHost = ""
 if ($novastarUse -match '^[yY]') {
     $novastarHost = Read-Host "  Novastar controller IP address (e.g. 172.16.0.11)"
@@ -393,12 +379,10 @@ if ($novastarUse -match '^[yY]') {
     else { Log "No controller address given - Novastar integration left OFF." }
 }
 
-# ---- Private, machine-trusted HTTPS certificate (store-based) ----
 Write-Host ""
 Write-Host "  Illumina serves its portal over HTTPS on this PC only. We create a private"
 Write-Host "  100-year certificate and trust it machine-wide, so browsers show a clean"
 Write-Host "  padlock with no warnings - no internet certificate needed."
-# Search for both old ("Kiosk") and new ("AVA PC") friendly names so re-runs don't duplicate
 $cert = Get-ChildItem Cert:\LocalMachine\My -ErrorAction SilentlyContinue |
         Where-Object { $_.FriendlyName -match "Illumina (Kiosk|AVA PC) HTTPS" -and $_.NotAfter -gt (Get-Date).AddMonths(1) } |
         Select-Object -First 1
@@ -410,19 +394,6 @@ if (-not $cert) {
     Log "Certificate created and trusted for this machine."
 } else { Log "Reusing this machine's existing HTTPS certificate." }
 
-# ALWAYS (re)assert private-key read access for local users. On re-installs
-# the cert is REUSED, so a grant placed inside the creation branch silently
-# never runs - and an account that can't read the key aborts every TLS
-# handshake (Chrome: ERR_CONNECTION_CLOSED; netstat fills with loopback
-# TIME_WAITs).
-#
-# HOW: the Software Key Storage Provider keeps the key's security descriptor
-# as the ACL of a file under %ProgramData%\Microsoft\Crypto\Keys - the same
-# ACL the certificate MMC's "Manage Private Keys" dialog edits. We edit that
-# file directly because CngKey.GetAccessControl/SetAccessControl exist only
-# on .NET Core 3.0+ (PowerShell 7); Windows PowerShell 5.1's .NET Framework
-# CngKey has no such methods. The SID form (*S-1-5-32-545 = Users) is used so
-# localized Windows names can't break the grant.
 try {
     $rsa        = [System.Security.Cryptography.X509Certificates.RSACertificateExtensions]::GetRSAPrivateKey($cert)
     $uniqueName = $rsa.Key.UniqueName
@@ -440,7 +411,6 @@ try {
     Write-Warning "  Could not adjust the certificate key ACL: $_"
 }
 
-# ---- Stamp machine truth into the overrides layer (merge, never clobber) ----
 $overridesPath = "$InstallDir\AppData\AppSettingsOverrides.json"
 if (Test-Path $overridesPath) { $obj = Get-Content $overridesPath -Raw | ConvertFrom-Json }
 else { $obj = [PSCustomObject]@{} }
@@ -449,8 +419,6 @@ if ($obj.PSObject.Properties.Name -contains "Kestrel") {
     $obj.PSObject.Properties.Remove("Kestrel")
     Log "Removed an outdated certificate override from a previous install."
 }
-# AGENTS.md binding contract: HTTPS on localhost only; congregation phones
-# and tablets reach the plain-HTTP endpoint on every interface (port 80).
 $obj | Add-Member -NotePropertyName "Urls" -Force -NotePropertyValue "https://localhost;http://0.0.0.0:80"
 
 if ($obj.PSObject.Properties.Name -notcontains "Kiosk") { $obj | Add-Member -NotePropertyName "Kiosk" -NotePropertyValue ([PSCustomObject]@{}) }
@@ -493,9 +461,6 @@ $nv = $obj.Novastar
 $nv | Add-Member -NotePropertyName "Enabled" -NotePropertyValue $novastarOn -Force
 if ($novastarOn) { $nv | Add-Member -NotePropertyName "Host" -NotePropertyValue $novastarHost -Force }
 
-# Member phones reach the AVA PC over the LAN; the QR overlay and the /view
-# page use CongregationView:BaseUrl, so stamp this machine's LAN address.
-# Settings can refine it later (e.g. a static DNS name).
 $lanIp = (Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
           Where-Object { $_.IPAddress -ne '127.0.0.1' -and $_.IPAddress -notlike '169.254.*' } |
           Select-Object -First 1).IPAddress
@@ -509,96 +474,32 @@ Log "Dependency paths stamped: LibreOffice='$sofficeResolved' FFmpeg='$ffmpegRes
 $obj | ConvertTo-Json -Depth 10 | Set-Content $overridesPath
 
 # ---------------- [8/9] Helpers + shortcuts ---------------------------------
-$portalAtLogon = $autoLoginOn -and $AutoOpenPortalAtLogon
-Log $(if ($portalAtLogon) { "Logon behavior: app + portal open automatically (true AVA PC boot)." }
-      else { "Logon behavior: app starts silently at logon; the desktop icon opens the portal." })
-
-# --app= gives the portal its own dedicated window (never swallowed as a tab
-# by a personal Chrome), with a clean title the positioner can recognize.
-$PortalLine = if ($ChromeExe) { "Start-Process '$ChromeExe' -ArgumentList '--app=$PortalUrl'" } else { "Start-Process '$PortalUrl'" }
-
 Log "[8/9] Writing the everyday shortcuts..."
 $AppExe = "$InstallDir\Illumina.exe"
 
-# The Open helper: Starts the backend if missing, waits for an actual HTTP 200 OK 
-# (not just a TCP port open, which Kestrel does before Blazor is ready), and then 
-# launches the portal. This guarantees the presence beacon fires instantly and 
-# KioskLaunchService runs its sweep-and-launch sequence perfectly.
-$open = @'
-param([int]$DelaySeconds = 0, [switch]$NoPortal)
-if ($DelaySeconds -gt 0) { Start-Sleep -Seconds $DelaySeconds }
-
-$app = "__APP__"
-if (-not (Get-Process -Name Illumina -ErrorAction SilentlyContinue)) {
-    Start-Process -FilePath $app -WorkingDirectory (Split-Path $app) -WindowStyle Hidden
-    
-    # Wait for the backend to actually serve HTTPS. Kestrel opens the TCP port 
-    # before the host is fully built. If we launch Chrome too early, it gets a 
-    # connection reset, the Blazor circuit never connects, the presence beacon 
-    # never fires, and the kiosk windows never launch.
-    $sw = [Diagnostics.Stopwatch]::StartNew()
-    $ready = $false
-    while ($sw.Elapsed.TotalSeconds -lt 45) {
-        $code = curl.exe -k -s -o NUL -w "%{http_code}" https://localhost
-        if ($code -eq "200" -or $code -eq "302") {
-            $ready = $true
-            break
-        }
-        Start-Sleep -Milliseconds 500
-    }
-    if (-not $ready) { Start-Sleep -Seconds 5 } # Fallback
-}
-
-if (-not $NoPortal) {
-    # Launch the portal. The C# backend detects the loopback connection,
-    # fires FirstLocalOperatorEntered, sweeps stale windows, and launches
-    # all walls/CMs. It also positions the portal window automatically.
-    __PORTAL__
-}
-'@
-$open = $open -replace '__APP__', $AppExe -replace '__PORTAL__', $PortalLine
-Set-Content "$InstallDir\open-illumina.ps1" $open
-
-# The Restart helper: Tears down the backend and kiosk profiles cleanly, then 
-# performs the exact same robust HTTP-ready startup sequence as the Open helper.
-$restart = @'
-# 1. Stop the backend
+# The Backend Manager: Kills any existing backend, starts a fresh one hidden,
+# and pops up a friendly native Windows message box telling the volunteer 
+# that the engine is ready and they can now open the portal.
+# Takes a -Silent switch for the Startup folder (no pop-up on boot).
+$backendScript = @'
+param([switch]$Silent)
 Get-Process -Name Illumina -ErrorAction SilentlyContinue | Stop-Process -Force
-
-# 2. Stop any kiosk Chrome windows (identified by their command line)
-Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" -ErrorAction SilentlyContinue |
-    Where-Object { $_.CommandLine -like '*IlluminaKiosk*' } |
-    ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
-
-Start-Sleep -Seconds 2
-
-# 3. Clean up kiosk profiles so Chrome doesn't restore crashed sessions
-$profileRoot = Join-Path $env:TEMP "IlluminaKiosk"
-if (Test-Path $profileRoot) {
-    Remove-Item -Recurse -Force $profileRoot -ErrorAction SilentlyContinue
-}
-
-# 4. Start the backend and wait for it to be truly ready
+Start-Sleep -Seconds 1
 $app = "__APP__"
 Start-Process -FilePath $app -WorkingDirectory (Split-Path $app) -WindowStyle Hidden
 
-$sw = [Diagnostics.Stopwatch]::StartNew()
-$ready = $false
-while ($sw.Elapsed.TotalSeconds -lt 45) {
-    $code = curl.exe -k -s -o NUL -w "%{http_code}" https://localhost
-    if ($code -eq "200" -or $code -eq "302") {
-        $ready = $true
-        break
-    }
-    Start-Sleep -Milliseconds 500
+if (-not $Silent) {
+    Add-Type -AssemblyName System.Windows.Forms
+    [System.Windows.Forms.MessageBox]::Show(
+        "The Illumina backend is now running in the background.`n`nPlease double-click the 'Illumina Portal' shortcut on your desktop to open the control panel.",
+        "Illumina AVA PC",
+        [System.Windows.Forms.MessageBoxButtons]::OK,
+        [System.Windows.Forms.MessageBoxIcon]::Information
+    )
 }
-if (-not $ready) { Start-Sleep -Seconds 5 }
-
-# 5. Launch the portal
-__PORTAL__
 '@
-$restart = $restart -replace '__APP__', $AppExe -replace '__PORTAL__', $PortalLine
-Set-Content "$InstallDir\restart-illumina.ps1" $restart
+$backendScript = $backendScript -replace '__APP__', $AppExe
+Set-Content "$InstallDir\start-backend.ps1" $backendScript
 
 if ($HumanUser -eq $env:USERNAME) {
     $UserDesktop = [Environment]::GetFolderPath("Desktop")
@@ -609,40 +510,40 @@ if ($HumanUser -eq $env:USERNAME) {
     New-Item -ItemType Directory -Path $UserDesktop -Force | Out-Null
     New-Item -ItemType Directory -Path $UserStartup -Force | Out-Null
 }
-$spots = @(
-    [Environment]::GetFolderPath("CommonDesktopDirectory"),
-    [Environment]::GetFolderPath("CommonStartup"),
-    $UserDesktop,
-    $UserStartup,
-    "C:\Users\avauser\Desktop",
-    "C:\Users\avauser\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup"
-)
+
+# Clean up old shortcuts
+$spots = @([Environment]::GetFolderPath("CommonDesktopDirectory"), [Environment]::GetFolderPath("CommonStartup"), $UserDesktop, $UserStartup, "C:\Users\avauser\Desktop", "C:\Users\avauser\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup")
 foreach ($spot in $spots) {
     if (Test-Path $spot) {
-        Get-ChildItem $spot -Filter "Illumina*.lnk"         -ErrorAction SilentlyContinue | Remove-Item -Force
-        Get-ChildItem $spot -Filter "Restart Illumina*.lnk" -ErrorAction SilentlyContinue | Remove-Item -Force
+        Get-ChildItem $spot -Filter "Illumina*.lnk" -ErrorAction SilentlyContinue | Remove-Item -Force
+        Get-ChildItem $spot -Filter "Restart*.lnk"  -ErrorAction SilentlyContinue | Remove-Item -Force
     }
 }
+
 $Wsh   = New-Object -ComObject WScript.Shell
 $PsExe = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
 
-$s = $Wsh.CreateShortcut("$UserDesktop\Illumina.lnk")
-$s.TargetPath   = $PsExe
-$s.Arguments    = "-ExecutionPolicy Bypass -WindowStyle Hidden -File `"$InstallDir\open-illumina.ps1`""
-$s.IconLocation = $(if ($ChromeExe) { "$ChromeExe,0" } else { "shell32.dll,14" })
-$s.Save()
+# 1. The Portal Shortcut (Native Chrome, no PowerShell wrapper)
+$portal = $Wsh.CreateShortcut("$UserDesktop\Illumina Portal.lnk")
+$portal.TargetPath   = $ChromeExe
+$portal.Arguments    = "--app=$PortalUrl"
+$portal.IconLocation = "$ChromeExe,0"
+$portal.Save()
 
-$r = $Wsh.CreateShortcut("$UserDesktop\Restart Illumina (if misbehaving).lnk")
-$r.TargetPath   = $PsExe
-$r.Arguments    = "-ExecutionPolicy Bypass -WindowStyle Hidden -File `"$InstallDir\restart-illumina.ps1`""
-$r.IconLocation = "shell32.dll,238"
-$r.Save()
+# 2. The Backend Restart Shortcut (Shows the friendly pop-up)
+$restart = $Wsh.CreateShortcut("$UserDesktop\Restart Illumina Backend.lnk")
+$restart.TargetPath   = $PsExe
+$restart.Arguments    = "-ExecutionPolicy Bypass -WindowStyle Hidden -File `"$InstallDir\start-backend.ps1`""
+$restart.IconLocation = "shell32.dll,238" # Refresh/Restart icon
+$restart.Save()
 
-$a = $Wsh.CreateShortcut("$UserStartup\Illumina Startup.lnk")
-$a.TargetPath = $PsExe
-$a.Arguments  = "-ExecutionPolicy Bypass -WindowStyle Hidden -File `"$InstallDir\open-illumina.ps1`" -DelaySeconds $LogonDelaySeconds" + $(if ($portalAtLogon) { "" } else { " -NoPortal" })
-$a.Save()
-Log "Shortcuts placed for $HumanUser - 'Illumina' (everyday) and 'Restart Illumina' (recovery)."
+# 3. The Auto-Start Shortcut (Runs silently on boot so the engine is always ready)
+$autoStart = $Wsh.CreateShortcut("$UserStartup\Illumina Backend AutoStart.lnk")
+$autoStart.TargetPath = $PsExe
+$autoStart.Arguments  = "-ExecutionPolicy Bypass -WindowStyle Hidden -File `"$InstallDir\start-backend.ps1`" -Silent"
+$autoStart.Save()
+
+Log "Shortcuts placed for $HumanUser - 'Illumina Portal' (everyday) and 'Restart Illumina Backend' (recovery)."
 
 # ---------------- [9/9] Network, power, summary -----------------------------
 Log "[9/9] Opening the network doors and keeping the PC awake..."
@@ -662,20 +563,19 @@ Write-Host "   AVA PC Account: $HumanUser$(if ($useAvaUser) { ' (dedicated stand
 Write-Host "   Auto sign-in  : $(if ($autoLoginOn) { 'configured' } else { 'off - normal logon screen' })"
 Write-Host "   Right Display : $rightWallOn   Streaming: $streamOn   Drive sync: $syncOn"
 Write-Host "   Home Assistant: $(if ($haOn) { $haUrl } else { 'off' })   Novastar: $(if ($novastarOn) { $novastarHost } else { 'off' })"
-Write-Host "   Portal        : $PortalUrl  (desktop icon 'Illumina' opens it any time)"
-if ($lanIp) { Write-Host "   Phones        : http://$lanIp  (QR overlay + /view page)" }
+Write-Host ""
+Write-Host "  🎉 You are all set! Here is how to start your first session:" -ForegroundColor Yellow
+Write-Host ""
+Write-Host "   1. RESTART this PC (or double-click 'Restart Illumina Backend'" -ForegroundColor White
+Write-Host "      on the desktop). This starts the engine in the background." -ForegroundColor White
+Write-Host ""
+Write-Host "   2. Double-click the 'Illumina Portal' shortcut on the desktop." -ForegroundColor White
+Write-Host "      The control panel will open, and your displays will wake up!" -ForegroundColor White
+Write-Host ""
+Write-Host "  From now on, the backend starts automatically every time the PC" -ForegroundColor Cyan
+Write-Host "  boots. You only ever need to click the 'Illumina Portal' icon." -ForegroundColor Cyan
 Write-Host ""
 if ($autoLoginOn) {
-    Write-Host "   Auto sign-in takes effect the next time this PC restarts - for example"
-    Write-Host "   after a power cut or your next planned reboot. There is nothing you need"
-    Write-Host "   to do right now: the desktop icon 'Illumina' starts everything immediately"
-    Write-Host "   in this session, and from the next restart onward the PC will boot"
-    Write-Host "   straight into Illumina on its own."
-    $ans = Read-Host "Would you like to restart now to see auto sign-in in action? [y/N] (ENTER = No)"
+    $ans = Read-Host "  Would you like to restart now to finish setup? [y/N] (ENTER = No)"
     if ($ans -match '^[yY]') { Restart-Computer }
-} else {
-    Write-Host "   No restart is needed - everything is live already. The desktop icon"
-    Write-Host "   'Illumina' starts the app and opens the portal any time, and the"
-    Write-Host "   'Restart Illumina' icon is the one-click recovery if a display ever"
-    Write-Host "   misbehaves."
 }
