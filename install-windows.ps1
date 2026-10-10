@@ -302,7 +302,6 @@ Set-Content "$MachineDir\current-version" $Release.tag_name
 # ---------------- [7/9] Firewall, Certificate & Machine Settings ------------
 Log "[7/9] Configuring Firewall, HTTPS certificate, and settings..."
 
-# Configure Windows Firewall rules for HTTP and HTTPS inbound traffic
 Log "Configuring Windows Firewall rules for port 80 and 443..."
 New-NetFirewallRule -DisplayName "Illumina Web HTTP" -Direction Inbound -Protocol TCP -LocalPort 80 -Action Allow -ErrorAction SilentlyContinue | Out-Null
 New-NetFirewallRule -DisplayName "Illumina Web HTTPS" -Direction Inbound -Protocol TCP -LocalPort 443 -Action Allow -ErrorAction SilentlyContinue | Out-Null
@@ -435,4 +434,4 @@ if (-not $NoPortal) { __PORTAL__ }
 $open =$open -replace '__APP__', $AppExe -replace '__PORTAL__',$PortalLine
 Set-Content "$InstallDir\open-illumina.ps1" $open
 
-Log "Installation complete successfully!"
+Log "Installation completed successfully!"
