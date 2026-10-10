@@ -1,5 +1,18 @@
 # Illumina AVA PC Deployment Guide
 
+
+$cert = Get-ChildItem Cert:\LocalMachine\My | Where-Object { $_.FriendlyName -eq 'Illumina Kiosk HTTPS' }
+$rsa  = [System.Security.Cryptography.X509Certificates.RSACertificateExtensions]::GetRSAPrivateKey($cert)
+$acl  = $rsa.Key.GetAccessControl()
+$acl.AddAccessRule((New-Object System.Security.Cryptography.AccessControl.CngKeyAccessRule(
+        'Users',
+        [System.Security.Cryptography.AccessControl.CngKeyRights]::Read,
+        [System.Security.Cryptography.AccessControl.AccessControlType]::Allow)))
+$rsa.Key.SetAccessControl($acl)
+Write-Host "Private key now readable by all local users."
+
+
+
 Welcome to the automated deployment system for **Illumina**, the enterprise-grade audio-visual presentation platform designed for live production environments. Built on .NET 10 / ASP.NET Core Blazor with MudBlazor, Illumina is the operational hub for services, media, streaming, recording, and archives.
 
 This guide will walk you through transforming a standard workstation into a dedicated, self-healing Illumina kiosk in just a few minutes. Our automated installers handle environment configuration, secure certificate generation, dependency provisioning, and display calibration seamlessly.
