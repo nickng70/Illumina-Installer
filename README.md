@@ -1,5 +1,19 @@
 # Illumina AVA PC Deployment Guide
 
+
+  "Kestrel": {
+    "Certificates": {
+      "Default": {
+        "Subject": "localhost",
+        "Store": "My",
+        "Location": "LocalMachine",
+        "AllowInvalid": true
+      }
+    }
+  },
+
+
+
 Welcome to the automated deployment system for **Illumina**, the enterprise-grade audio-visual presentation platform designed for live production environments. Built on .NET 10 / ASP.NET Core Blazor with MudBlazor, Illumina is the operational hub for services, media, streaming, recording, and archives.
 
 This guide will walk you through transforming a standard workstation into a dedicated, self-healing Illumina kiosk in just a few minutes. Our automated installers handle environment configuration, secure certificate generation, dependency provisioning, and display calibration seamlessly.
