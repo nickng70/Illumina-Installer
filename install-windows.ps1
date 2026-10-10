@@ -7,13 +7,14 @@
       Home Assistant / Novastar); ENTER = No everywhere
     - Home Assistant: detect first, then address; Windows gets honest
       guidance (HA is officially Linux/VM/appliance territory)
-    - Resolved dependency paths + integration settings stamped into the
-      per-machine overrides layer; appsettings.json stays universal
+    - Patches the INSTALLED appsettings.json with the machine-store Kestrel
+      block when the release zip predates it (Kestrel binds at host start,
+      before the overrides layer loads - a missing block bricked fresh PCs)
+    - Creates + trusts a private 100-year machine certificate
     - Binding contract per AGENTS.md: HTTPS localhost-only + HTTP on all
       interfaces for congregation phones; QR BaseUrl auto-stamped
     - Clean [1]/[2] kiosk-account menu; surgical process handling
     - Content folders permission-locked and hidden quietly
-    - HTTPS via a private 100-year certificate in the machine store
     - Human-facing labels use "Display"; internal config keys keep their
       legacy names for backwards compatibility with deployed churches
 #>
@@ -266,6 +267,30 @@ if ($Backup) {
     Move-Item $Backup "$InstallDir\Data" -Force
 }
 New-Item -ItemType Directory -Path "$InstallDir\Data" -Force | Out-Null
+
+# Belt-and-braces: Kestrel binds HTTPS at host start, BEFORE the overrides
+# layer loads, so the certificate config must exist in appsettings.json
+# itself. Release zips published before the store-based block existed would
+# otherwise brick fresh PCs (no dev certificate to fall back to there).
+# Patched in only when missing - never clobber a repo-shipped/custom block.
+$appSettingsPath = "$InstallDir\appsettings.json"
+$asObj = Get-Content $appSettingsPath -Raw | ConvertFrom-Json
+if ($asObj.PSObject.Properties.Name -notcontains "Kestrel") {
+    $asObj | Add-Member -NotePropertyName "Kestrel" -NotePropertyValue ([PSCustomObject]@{
+        Certificates = [PSCustomObject]@{
+            Default = [PSCustomObject]@{
+                Subject      = "localhost"
+                Store        = "My"
+                Location     = "LocalMachine"
+                AllowInvalid = $true
+            }
+        }
+    })
+    $asObj | ConvertTo-Json -Depth 12 | Set-Content $appSettingsPath
+    Log "Patched appsettings.json with the machine-store HTTPS certificate block."
+} else {
+    Log "appsettings.json already carries a Kestrel certificate block - left untouched."
+}
 
 foreach ($w in @("SlideContent", "MediaContent", "AppData", "Recordings")) {
     $p = Join-Path $InstallDir $w
