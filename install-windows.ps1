@@ -330,6 +330,24 @@ $streamOn    = ($streaming -match '^[yY]')
 $syncOn      = ($sync -match '^[yY]')
 Log "Survey recorded - Right Display: $rightWallOn | Streaming: $streamOn | Drive sync: $syncOn"
 
+# The private key's default ACL grants only SYSTEM + the elevated token that
+# created it - but the app runs NON-elevated as the kiosk account, and a TLS
+# handshake without key-read access aborts every connection (Chrome shows
+# ERR_CONNECTION_CLOSED while netstat fills with loopback TIME_WAITs).
+# Grant read to local users at creation time so day one just works.
+try {
+    $rsa    = [System.Security.Cryptography.X509Certificates.RSACertificateExtensions]::GetRSAPrivateKey($cert)
+    $keyAcl = $rsa.Key.GetAccessControl()
+    $keyAcl.AddAccessRule((New-Object System.Security.Cryptography.AccessControl.CngKeyAccessRule(
+            'Users',
+            [System.Security.Cryptography.AccessControl.CngKeyRights]::Read,
+            [System.Security.Cryptography.AccessControl.AccessControlType]::Allow)))
+    $rsa.Key.SetAccessControl($keyAcl)
+    Log "Certificate private key readable by the kiosk account."
+} catch {
+    Write-Warning "  Could not adjust the certificate key ACL - if the portal shows ERR_CONNECTION_CLOSED, grant 'Users' read access to the 'Illumina Kiosk HTTPS' private key."
+}
+
 # ---- Google Drive key + folder IDs (only when sync was requested) ----
 $keyJson  = "$MachineDir\key.json"
 $prayerId = ""; $annId = ""
