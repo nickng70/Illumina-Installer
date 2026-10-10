@@ -520,49 +520,81 @@ $PortalLine = if ($ChromeExe) { "Start-Process '$ChromeExe' -ArgumentList '--app
 Log "[8/9] Writing the everyday shortcuts..."
 $AppExe = "$InstallDir\Illumina.exe"
 
+# The Open helper: Starts the backend if missing, waits for an actual HTTP 200 OK 
+# (not just a TCP port open, which Kestrel does before Blazor is ready), and then 
+# launches the portal. This guarantees the presence beacon fires instantly and 
+# KioskLaunchService runs its sweep-and-launch sequence perfectly.
 $open = @'
 param([int]$DelaySeconds = 0, [switch]$NoPortal)
 if ($DelaySeconds -gt 0) { Start-Sleep -Seconds $DelaySeconds }
+
 $app = "__APP__"
 if (-not (Get-Process -Name Illumina -ErrorAction SilentlyContinue)) {
-    Start-Process $app -WorkingDirectory (Split-Path $app) -WindowStyle Hidden
-    $sw = [Diagnostics.Stopwatch]::StartNew()
-    while ($sw.Elapsed.TotalSeconds -lt 30) {
-        try { $t = New-Object System.Net.Sockets.TcpClient; $t.Connect('127.0.0.1', 443); $t.Close(); break }
-        catch { Start-Sleep -Seconds 1 }
-    }    
-}
-if (-not $NoPortal) { 
-    __PORTAL__
+    Start-Process -FilePath $app -WorkingDirectory (Split-Path $app) -WindowStyle Hidden
     
-    # The backend detects this portal and launches the fullscreen kiosk 
-    # windows a few seconds later. Those kiosk windows can steal focus or 
-    # cover the portal. We wait for them to settle, then explicitly bring 
-    # the main portal back to the front.
-    Start-Sleep -Seconds 8
-    $wshell = New-Object -ComObject wscript.shell
-    # The main portal's <PageTitle> is exactly "Illumina" (no suffix)
-    $portal = Get-Process chrome -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowTitle -eq 'Illumina' } | Select-Object -First 1
-    if ($portal) { $wshell.AppActivate($portal.Id) | Out-Null }
+    # Wait for the backend to actually serve HTTPS. Kestrel opens the TCP port 
+    # before the host is fully built. If we launch Chrome too early, it gets a 
+    # connection reset, the Blazor circuit never connects, the presence beacon 
+    # never fires, and the kiosk windows never launch.
+    $sw = [Diagnostics.Stopwatch]::StartNew()
+    $ready = $false
+    while ($sw.Elapsed.TotalSeconds -lt 45) {
+        $code = curl.exe -k -s -o NUL -w "%{http_code}" https://localhost
+        if ($code -eq "200" -or $code -eq "302") {
+            $ready = $true
+            break
+        }
+        Start-Sleep -Milliseconds 500
+    }
+    if (-not $ready) { Start-Sleep -Seconds 5 } # Fallback
+}
+
+if (-not $NoPortal) {
+    # Launch the portal. The C# backend detects the loopback connection,
+    # fires FirstLocalOperatorEntered, sweeps stale windows, and launches
+    # all walls/CMs. It also positions the portal window automatically.
+    __PORTAL__
 }
 '@
 $open = $open -replace '__APP__', $AppExe -replace '__PORTAL__', $PortalLine
 Set-Content "$InstallDir\open-illumina.ps1" $open
 
+# The Restart helper: Tears down the backend and kiosk profiles cleanly, then 
+# performs the exact same robust HTTP-ready startup sequence as the Open helper.
 $restart = @'
+# 1. Stop the backend
 Get-Process -Name Illumina -ErrorAction SilentlyContinue | Stop-Process -Force
+
+# 2. Stop any kiosk Chrome windows (identified by their command line)
 Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" -ErrorAction SilentlyContinue |
     Where-Object { $_.CommandLine -like '*IlluminaKiosk*' } |
     ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+
 Start-Sleep -Seconds 2
-Remove-Item -Recurse -Force "$env:TEMP\IlluminaKiosk" -ErrorAction SilentlyContinue
-$app = "__APP__"
-Start-Process $app -WorkingDirectory (Split-Path $app) -WindowStyle Hidden
-$sw = [Diagnostics.Stopwatch]::StartNew()
-while ($sw.Elapsed.TotalSeconds -lt 30) {
-    try { $t = New-Object System.Net.Sockets.TcpClient; $t.Connect('127.0.0.1', 443); $t.Close(); break }
-    catch { Start-Sleep -Seconds 1 }
+
+# 3. Clean up kiosk profiles so Chrome doesn't restore crashed sessions
+$profileRoot = Join-Path $env:TEMP "IlluminaKiosk"
+if (Test-Path $profileRoot) {
+    Remove-Item -Recurse -Force $profileRoot -ErrorAction SilentlyContinue
 }
+
+# 4. Start the backend and wait for it to be truly ready
+$app = "__APP__"
+Start-Process -FilePath $app -WorkingDirectory (Split-Path $app) -WindowStyle Hidden
+
+$sw = [Diagnostics.Stopwatch]::StartNew()
+$ready = $false
+while ($sw.Elapsed.TotalSeconds -lt 45) {
+    $code = curl.exe -k -s -o NUL -w "%{http_code}" https://localhost
+    if ($code -eq "200" -or $code -eq "302") {
+        $ready = $true
+        break
+    }
+    Start-Sleep -Milliseconds 500
+}
+if (-not $ready) { Start-Sleep -Seconds 5 }
+
+# 5. Launch the portal
 __PORTAL__
 '@
 $restart = $restart -replace '__APP__', $AppExe -replace '__PORTAL__', $PortalLine
