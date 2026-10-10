@@ -1,49 +1,39 @@
 <#
-    Illumina AVA PC Uninstaller - Windows (v8.0)
-    Companion to install-windows.ps1, for decommissioning a PC or repairing
-    a corrupted install. Preserves your content folders by default, removes
-    the machine store (token, Drive key, certificate), and never touches
-    personal Chrome or companion tools (LibreOffice/FFmpeg/Chrome stay).
-    For 99% of problems, RE-RUNNING THE INSTALLER is the correct recovery
-    path - uninstall only when you truly mean it.
+    Illumina AVA PC Uninstaller - Windows 10/11 (v8.0 FINAL)
+    Safely removes Illumina, its shortcuts, firewall rules, and local HTTPS certificate.
+    Preserves the 'avauser' account and optionally preserves machine settings.
 #>
 $ErrorActionPreference = "Stop"
-function Log($m) { Write-Host "`n==> $m" -ForegroundColor Green }
 
+$InstallDir  = "C:\Program Files\Illumina"
+$MachineDir  = "C:\ProgramData\Illumina"
+
+# ---------------- Administrator check ---------------------------------
 $identity  = [Security.Principal.WindowsIdentity]::GetCurrent()
 $principal = New-Object Security.Principal.WindowsPrincipal($identity)
 if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-    Write-Host "  Please re-run this script from an elevated PowerShell (right-click > Run as administrator)." -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "  Illumina uninstaller needs administrator rights to remove program files" -ForegroundColor Yellow
+    Write-Host "  and firewall rules. Please close this window, open PowerShell again with" -ForegroundColor Yellow
+    Write-Host "  right-click > 'Run as administrator', and paste the same command." -ForegroundColor Yellow
     exit 1
 }
 
 Write-Host "==================================================" -ForegroundColor Cyan
-Write-Host "   Illumina Uninstaller - Windows                 " -ForegroundColor Cyan
+Write-Host "   Illumina AVA PC Uninstaller                    " -ForegroundColor Cyan
 Write-Host "==================================================" -ForegroundColor Cyan
-$InstallDir = "C:\Program Files\Illumina"
-$MachineDir = "C:\ProgramData\Illumina"
+Write-Host ""
 
-$ans = Read-Host "This removes Illumina from this PC. Continue? [y/N] (ENTER = No)"
-if ($ans -notmatch '^[yY]') { Write-Host "  Nothing was changed."; exit 0 }
-
-$keep = Read-Host "Preserve the content folders (slides/media) as a backup first? [Y/n] (ENTER = Yes)"
-$keepData = ($keep -notmatch '^[nN]')
-
-Log "Pausing Illumina..."
+# 1. Stop Processes
+Write-Host "==> Stopping Illumina processes..." -ForegroundColor Green
 Get-Process -Name Illumina -ErrorAction SilentlyContinue | Stop-Process -Force
 Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" -ErrorAction SilentlyContinue |
-    Where-Object { $_.CommandLine -like '*IlluminaKiosk*' } |
+    Where-Object { $_.CommandLine -like '*IlluminaKiosk*' -or $_.CommandLine -like '*Illumina Portal*' -or $_.CommandLine -like '*https://localhost*' } |
     ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 Start-Sleep -Seconds 2
 
-if ($keepData -and (Test-Path "$InstallDir\Data")) {
-    $dest = "C:\Illumina-Data-Backup"
-    if (Test-Path $dest) { $dest = "C:\Illumina-Data-Backup-$(Get-Date -Format 'yyyyMMdd-HHmmss')" }
-    Move-Item "$InstallDir\Data" $dest -Force
-    Log "Content folders preserved at $dest"
-}
-
-Log "Removing shortcuts..."
+# 2. Remove Shortcuts (Cleans up v8.0 FINAL and legacy shortcuts)
+Write-Host "==> Removing shortcuts..." -ForegroundColor Green
 $spots = @(
     [Environment]::GetFolderPath("CommonDesktopDirectory"),
     [Environment]::GetFolderPath("CommonStartup"),
@@ -54,45 +44,51 @@ $spots = @(
 )
 foreach ($spot in $spots) {
     if (Test-Path $spot) {
-        Get-ChildItem $spot -Filter "Illumina*.lnk"         -ErrorAction SilentlyContinue | Remove-Item -Force
+        # v8.0 FINAL shortcuts
+        Remove-Item "$spot\Illumina Portal.lnk" -Force -ErrorAction SilentlyContinue
+        Remove-Item "$spot\Restart Illumina Backend.lnk" -Force -ErrorAction SilentlyContinue
+        Remove-Item "$spot\Illumina Backend AutoStart.lnk" -Force -ErrorAction SilentlyContinue
+        # Legacy shortcuts cleanup
+        Get-ChildItem $spot -Filter "Illumina*.lnk" -ErrorAction SilentlyContinue | Remove-Item -Force
         Get-ChildItem $spot -Filter "Restart Illumina*.lnk" -ErrorAction SilentlyContinue | Remove-Item -Force
     }
 }
 
-Log "Removing firewall rules..."
-Remove-NetFirewallRule -DisplayName "Illumina Web App"      -ErrorAction SilentlyContinue
+# 3. Remove Firewall Rules
+Write-Host "==> Removing firewall rules..." -ForegroundColor Green
+Remove-NetFirewallRule -DisplayName "Illumina Web App" -ErrorAction SilentlyContinue
 Remove-NetFirewallRule -DisplayName "Illumina Phones HTTP" -ErrorAction SilentlyContinue
 
+# 4. Remove Certificates (Cleans up v8.0 and legacy "Kiosk" certs)
+Write-Host "==> Removing HTTPS certificates..." -ForegroundColor Green
+Get-ChildItem Cert:\LocalMachine\My -ErrorAction SilentlyContinue | 
+    Where-Object { $_.FriendlyName -match "Illumina (Kiosk|AVA PC) HTTPS" } | 
+    Remove-Item -Force
+Get-ChildItem Cert:\LocalMachine\Root -ErrorAction SilentlyContinue | 
+    Where-Object { $_.FriendlyName -match "Illumina (Kiosk|AVA PC) HTTPS" } | 
+    Remove-Item -Force
+
+# 5. Restore Normal Logon (Disable Auto-Login)
+Write-Host "==> Restoring normal Windows logon screen..." -ForegroundColor Green
 $Winlogon = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon"
-$wl = Get-ItemProperty $Winlogon -ErrorAction SilentlyContinue
-if ($wl.AutoAdminLogon -eq "1") {
-    $dis = Read-Host "Auto sign-in is currently enabled for '$($wl.DefaultUserName)'. Disable it? [y/N] (ENTER = No)"
-    if ($dis -match '^[yY]') {
-        Set-ItemProperty $Winlogon "AutoAdminLogon" "0" -Type String
-        Set-ItemProperty $Winlogon "DefaultPassword" "" -Type String
-        Log "Auto sign-in disabled."
-    }
-}
+Set-ItemProperty $Winlogon "AutoAdminLogon" "0" -Type String -ErrorAction SilentlyContinue
+Set-ItemProperty $Winlogon "DefaultPassword" "" -Type String -ErrorAction SilentlyContinue
 
-Log "Removing the machine certificate..."
-Get-ChildItem Cert:\LocalMachine\My, Cert:\LocalMachine\Root -ErrorAction SilentlyContinue |
-    Where-Object { $_.FriendlyName -eq "Illumina Kiosk HTTPS" } | Remove-Item -Force -ErrorAction SilentlyContinue
+# 6. Remove Files
+Write-Host "==> Removing application files..." -ForegroundColor Green
+if (Test-Path $InstallDir) { Remove-Item $InstallDir -Recurse -Force }
 
-Log "Removing program files and machine store..."
-Remove-Item $InstallDir -Recurse -Force -ErrorAction SilentlyContinue
-Remove-Item $MachineDir -Recurse -Force -ErrorAction SilentlyContinue
-
-if (Get-LocalUser -Name "avauser" -ErrorAction SilentlyContinue) {
-    $rm = Read-Host "Also remove the 'avauser' kiosk account and its profile? [y/N] (ENTER = No)"
-    if ($rm -match '^[yY]') {
-        Remove-LocalUser -Name "avauser" -ErrorAction SilentlyContinue
-        Remove-Item "C:\Users\avauser" -Recurse -Force -ErrorAction SilentlyContinue
-        Log "Kiosk account removed."
-    }
+$keepMachineDir = Read-Host "  Keep machine settings (GitHub token, Google Drive keys, display overrides) for future installs? [Y/n] (ENTER = Yes)"
+if ($keepMachineDir -match '^[nN]') {
+    if (Test-Path $MachineDir) { Remove-Item $MachineDir -Recurse -Force }
+    Write-Host "  Machine settings removed." -ForegroundColor Yellow
+} else {
+    Write-Host "  Machine settings preserved in $MachineDir." -ForegroundColor Cyan
 }
 
 Write-Host ""
-Write-Host "  Illumina has been removed from this PC." -ForegroundColor Green
-Write-Host "  Companion tools (Chrome, LibreOffice, FFmpeg) were left in place - they"
-Write-Host "  are general-purpose software you may want to keep. Power settings remain"
-Write-Host "  as configured; adjust them in Windows Settings if desired."
+Write-Host "==================================================" -ForegroundColor Green
+Write-Host "   Uninstall complete!                            " -ForegroundColor Green
+Write-Host "==================================================" -ForegroundColor Green
+Write-Host "  Note: The dedicated 'avauser' account was left intact."
+Write-Host "  You can safely delete it from Windows Settings > Accounts if needed."
