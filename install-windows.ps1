@@ -67,17 +67,18 @@ Write-Host "   Illumina AVA PC Installer - Windows (v8.0)     " -ForegroundColor
 Write-Host "   Guided setup for a safe, self-starting AVA PC  " -ForegroundColor Cyan
 Write-Host "==================================================" -ForegroundColor Cyan
 Write-Host ""
-Write-Host "  Welcome! This installer prepares this PC to run Illumina around the"
-Write-Host "  clock: it fetches the latest release and the media engines it needs,"
-Write-Host "  configures secure local HTTPS, and tailors the displays and smart"
-Write-Host "  integrations to your hardware. Every question explains itself, and"
-Write-Host "  pressing ENTER always accepts the safe, recommended default."
+Write-Host "  Welcome! This installer prepares this PC to run Illumina."
+Write-Host "  1. Fetches the latest release and the media engines it needs,"
+Write-Host "  2. Configures secure local HTTPS with local SSL certificate and"
+Write-Host "  3. Integrations with your hardware."
+Write-Host "  Note: To change or customize advanced options,"
+Write-Host "        navigate to Menu->Settings."
 
 # ---------------- [1/9] GitHub token ----------------------------------------
-Log "[1/9] Release access token..."
+Log "[1/9] Accessing GitHub Illumina repository..."
 New-Item -ItemType Directory -Path $MachineDir -Force | Out-Null
 if ($env:GITHUB_TOKEN) { $Token = $env:GITHUB_TOKEN; Log "Using the token from this session's environment." }
-elseif (Test-Path $TokenFile) { $Token = (Get-Content $TokenFile -Raw).Trim(); Log "Reusing the token stored on this machine - nothing to type." }
+elseif (Test-Path $TokenFile) { $Token = (Get-Content $TokenFile -Raw).Trim(); Log "Reusing the token stored on this machine." }
 else {
     Write-Host "  Illumina's release packages live in a private repository, so we need"
     Write-Host "  a read-only GitHub token once; it is then stored securely on this PC."
@@ -103,7 +104,7 @@ Log "Release $($Release.tag_name) downloaded."
 Log "[3/9] Provisioning media engines and the display browser..."
 Write-Host "  Illumina relies on three companions: LibreOffice (converts slide"
 Write-Host "  decks), FFmpeg (remuxes the broadcast feed), and Chrome (renders every"
-Write-Host "  display). Anything missing is installed now, straight from the internet."
+Write-Host "  display). Anything missing will be installed now."
 
 if (Test-Path $SofficePath) { Log "LibreOffice already present." }
 else {
@@ -170,7 +171,7 @@ Write-Host "      and provides the safest environment for Sabbath services."
 Write-Host ""
 Write-Host "  [2] Run Illumina using $interactiveUser"
 Write-Host "      Uses your current Windows account ($interactiveUser)."
-Write-Host "      Ideal for personal laptops, IT testing, or initial setup by an administrator."
+Write-Host "      Choose this for personal laptops or if you are just testing Illumina."
 
 if (-not $currentUserIsAdmin) {
     Write-Host ""
@@ -241,11 +242,10 @@ else {
         Write-Host "  special cases; not recommended for a church deployment."
     }
     Write-Host ""
-    Write-Host "  Auto sign-in lets the PC boot straight into Illumina after a power cut - no"
-    Write-Host "  volunteer needs to type a password on Sabbath morning. On a personal laptop"
-    Write-Host "  you may prefer the normal logon screen instead."
+    Write-Host "  Auto sign-in lets the PC boot straight into Illumina without having to login."
+    Write-Host "  Choose No if this is your own laptop or to disable Auto sign-in."
     if ($autoOnNow) { Write-Host "  (Auto sign-in is currently enabled for '$autoUserNow'.)" }
-    $want = Read-Host "  Enable auto sign-in for $HumanUser on this PC? [y/N] (ENTER = No; any existing auto sign-in is then turned off)"
+    $want = Read-Host "  Enable auto sign-in for $HumanUser on this PC? [y/N] (ENTER = No)"
     if ($want -match '^[yY]') {
         $PlainPass = Read-NewPassword "  Windows password for $HumanUser, stored for auto sign-in (must be exact)"
         Set-AutoLogin $HumanUser $PlainPass
@@ -308,13 +308,13 @@ Log "[7/9] Site survey, HTTPS certificate, and machine settings..."
 Write-Host ""
 Write-Host "  Every church is wired differently, so we ask five quick questions."
 Write-Host "  ENTER accepts the safe default (No) for each, and everything here can"
-Write-Host "  be changed later in Settings without reinstalling."
+Write-Host "  be changed later in Menu->Settings."
 Write-Host "  Note: the CG overlay output is always prepared as part of the core"
 Write-Host "  display set (like the Left Display); question 2 controls the broadcast"
 Write-Host "  encoder, stream monitors and Aux Hall."
-$rightWall = Read-Host "  [1/5] Is a RIGHT Display connected (in addition to the Left Display)? [y/N] (ENTER = No)"
-$streaming = Read-Host "  [2/5] Is a STREAMING/BROADCAST setup used (encoder, stream monitors, Aux Hall)? [y/N] (ENTER = No)"
-$sync      = Read-Host "  [3/5] Should Prayer/Announcement slides sync from Google Drive? [y/N] (ENTER = No)"
+$rightWall = Read-Host "  [1/5] Do you have a RIGHT Display (in addition to the Left Display)? [y/N] (ENTER = No)"
+$streaming = Read-Host "  [2/5] Enable STREAMING display (for streaming and Aux Hall displays)? [y/N] (ENTER = No)"
+$sync      = Read-Host "  [3/5] Retrieve Prayer/Announcement slides from Google Drive? [y/N] (ENTER = No)"
 Write-Host ""
 Write-Host "  Illumina can also talk to the smart hardware many churches already own."
 Write-Host "  Both integrations are optional and can be switched on later in Settings."
