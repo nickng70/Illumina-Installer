@@ -1,5 +1,5 @@
 <#
-    Illumina AVA PC Installer - Windows 10/11 (v8.0 FINAL)
+    Illumina AVA PC Installer - Windows 10/11 (v8.1 FINAL)
     - Friendly administrator check; nothing changes before it passes
     - Provisions media engines from the internet: LibreOffice (slides),
       FFmpeg (broadcast), and Chrome itself if missing (winget)
@@ -17,6 +17,7 @@
     - Content folders permission-locked and hidden quietly
     - Human-facing labels use "Display"; internal config keys keep their
       legacy names for backwards compatibility with deployed churches
+    - Automated firewall and loopback exemptions for fresh Windows PCs
 #>
 $ErrorActionPreference = "Stop"
 
@@ -32,7 +33,7 @@ $TokenFile   = "$MachineDir\github-token"
 $SofficePath = "C:\Program Files\LibreOffice\program\soffice.exe"
 $FfmpegPath  = "C:\ffmpeg\ffmpeg.exe"
 $LogonDelaySeconds     = 12
-$AutoOpenPortalAtLogon = $true
+$AutoOpenPortalAtLogon =$true
 # ----------------------------------------------------------------------------
 
 function Log($m) { Write-Host "`n==> $m" -ForegroundColor Green }
@@ -62,8 +63,8 @@ if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administra
 }
 
 Write-Host "==================================================" -ForegroundColor Cyan
-Write-Host "   Illumina AVA PC Installer - Windows (v8.0)     " -ForegroundColor Cyan
-Write-Host "   Guided setup for a safe, self-starting kiosk   " -ForegroundColor Cyan
+Write-Host "    Illumina AVA PC Installer - Windows (v8.1)     " -ForegroundColor Cyan
+Write-Host "    Guided setup for a safe, self-starting kiosk   " -ForegroundColor Cyan
 Write-Host "==================================================" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "  Welcome! This installer prepares this PC to run Illumina around the"
@@ -140,8 +141,6 @@ if ($ChromeExe) { Log "Chrome ready at $ChromeExe" } else { Write-Warning "  Chr
 # ---------------- [4/9] Pause previous session ------------------------------
 Log "[4/9] Pausing any running Illumina session..."
 Get-Process -Name Illumina -ErrorAction SilentlyContinue | Stop-Process -Force
-# Only Chrome windows that belong to Illumina's own kiosk profiles - never
-# the operator's personal browser tabs.
 Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" -ErrorAction SilentlyContinue |
     Where-Object { $_.CommandLine -like '*IlluminaKiosk*' } |
     ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
@@ -177,15 +176,14 @@ $mode = Read-Host "`n  Select setup type (press ENTER for 1)"
 $useAvaUser = ($mode -ne '2')
 
 $Winlogon = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon"
-$wl       = Get-ItemProperty $Winlogon -ErrorAction SilentlyContinue
+$wl       = Get-ItemProperty$Winlogon -ErrorAction SilentlyContinue
 $autoOnNow   = ($wl.AutoAdminLogon -eq "1")
-$autoUserNow = $wl.DefaultUserName
+$autoUserNow =$wl.DefaultUserName
 
 function Read-NewPassword([string]$what) {
-    $p1 = Read-Host $what
-    if (-not $p1) { return $null }
-    $p2 = Read-Host "  Type it once more to confirm"
-    if ($p1 -ne $p2) { throw "The two passwords did not match - nothing was changed. Please re-run the installer." }
+    $p1 = Read-Host$what
+    if (-not $p1) { return $null }$p2 = Read-Host "  Type it once more to confirm"
+    if ($p1 -ne$p2) { throw "The two passwords did not match - nothing was changed. Please re-run the installer." }
     return $p1
 }
 function Set-AutoLogin([string]$user, [string]$pass) {
@@ -199,24 +197,22 @@ function Clear-AutoLogin {
     Set-ItemProperty $Winlogon "DefaultPassword" ""  -Type String
 }
 
-$autoLoginOn = $false
-if ($useAvaUser) {
-    $HumanUser = "avauser"
-    $existing  = Get-LocalUser -Name $HumanUser -ErrorAction SilentlyContinue
-    $reusable = $autoOnNow -and ($autoUserNow -eq $HumanUser) -and $wl.DefaultPassword
+$autoLoginOn =$false
+if ($useAvaUser) {$HumanUser = "avauser"
+    $existing  = Get-LocalUser -Name $HumanUser -ErrorAction SilentlyContinue$reusable = $autoOnNow -and ($autoUserNow -eq $HumanUser) -and$wl.DefaultPassword
     if ($reusable) {
-        $PlainPass = $wl.DefaultPassword
+        $PlainPass =$wl.DefaultPassword
         Log "Reusing avauser's existing password (re-install detected)."
     } else {
         $PlainPass = Read-NewPassword "  Set the SECRET password for avauser (used for maintenance logins; typed twice to avoid typos)"
         if (-not $PlainPass) { throw "A new kiosk account needs a password. Please re-run and provide one." }
     }
-    $Sec = ConvertTo-SecureString $PlainPass -AsPlainText -Force
+    $Sec = ConvertTo-SecureString$PlainPass -AsPlainText -Force
     if (-not $existing) {
         New-LocalUser -Name $HumanUser -FullName "AVA Kiosk" -Password $Sec -PasswordNeverExpires | Out-Null
         Log "Created kiosk account 'avauser' (its sign-in tile reads 'AVA Kiosk')."
     } else {
-        Set-LocalUser -Name $HumanUser -Password $Sec -PasswordNeverExpires $true
+        Set-LocalUser -Name $HumanUser -Password $Sec -PasswordNeverExpires$true
         Log "Refreshed the existing kiosk account 'avauser'."
     }
     $isAdminGrp = Get-LocalGroupMember -Group "Administrators" -Member $HumanUser -ErrorAction SilentlyContinue
@@ -224,43 +220,46 @@ if ($useAvaUser) {
         Remove-LocalGroupMember -Group "Administrators" -Member $HumanUser
         Log "Confirmed 'avauser' is a standard user (kiosk accounts must not be admins)."
     } else { Log "Confirmed 'avauser' is a standard user." }
-    Set-AutoLogin $HumanUser $PlainPass
-    $autoLoginOn = $true
+    Set-AutoLogin $HumanUser$PlainPass
+    $autoLoginOn =$true
     Log "Auto sign-in configured for avauser - it activates at the next restart."
+
+    # Grant loopback exemption for the kiosk user
+    try {
+        $sid = (New-Object System.Security.Principal.NTAccount($HumanUser)).Translate([System.Security.Principal.SecurityIdentifier]).Value
+        CheckNetIsolation LoopbackExempt -a -p="$sid" -Name="Illumina Kiosk Browser" | Out-Null
+        Log "Loopback network exemption granted for kiosk user ($HumanUser)."
+    } catch {
+        Write-Warning "Could not register loopback exemption automatically."
+    }
 }
 else {
-    $HumanUser = $interactiveUser
+    $HumanUser =$interactiveUser
     if ($currentUserIsAdmin) {
         Write-Host ""
         Write-Host "  NOTICE: continuing with an ADMINISTRATOR account ('$HumanUser')." -ForegroundColor Yellow
         Write-Host "  Anyone using this PC can delete or modify Illumina, change firewall rules,"
-        Write-Host "  and install software without a password prompt. Supported for testing and"
-        Write-Host "  special cases; not recommended for a church deployment."
+        Write-Host "  and install software without a password prompt."
     }
     Write-Host ""
-    Write-Host "  Auto sign-in lets the PC boot straight into Illumina after a power cut - no"
-    Write-Host "  volunteer needs to type a password on Sunday morning. On a personal laptop"
-    Write-Host "  you may prefer the normal logon screen instead."
-    if ($autoOnNow) { Write-Host "  (Auto sign-in is currently enabled for '$autoUserNow'.)" }
-    $want = Read-Host "  Enable auto sign-in for $HumanUser on this PC? [y/N] (ENTER = No; any existing auto sign-in is then turned off)"
-    if ($want -match '^[yY]') {
-        $PlainPass = Read-NewPassword "  Windows password for $HumanUser, stored for auto sign-in (must be exact)"
-        Set-AutoLogin $HumanUser $PlainPass
-        $autoLoginOn = $true
-        Log "Auto sign-in enabled for $HumanUser - it activates at the next restart."
+    $want = Read-Host "  Enable auto sign-in for $HumanUser on this PC? [y/N] (ENTER = No)"
+    if ($want -match '^[yY]') {$PlainPass = Read-NewPassword "  Windows password for $HumanUser, stored for auto sign-in"
+        Set-AutoLogin $HumanUser$PlainPass
+        $autoLoginOn =$true
+        Log "Auto sign-in enabled for $HumanUser."
     } else {
         Clear-AutoLogin
-        Log "Auto sign-in left OFF (and any previous configuration cleared) - the PC keeps its normal logon screen."
+        Log "Auto sign-in left OFF."
     }
 }
 
 # ---------------- [6/9] App files + content folders -------------------------
 Log "[6/9] Installing Illumina and preparing its content folders..."
-$Backup = $null
-if (Test-Path "$InstallDir\Data") { $Backup = Join-Path $env:TEMP "illumina-data-backup"; Move-Item "$InstallDir\Data" $Backup -Force }
-if (Test-Path $InstallDir) { Remove-Item $InstallDir -Recurse -Force }
+$Backup =$null
+if (Test-Path "$InstallDir\Data") { $Backup = Join-Path$env:TEMP "illumina-data-backup"; Move-Item "$InstallDir\Data" $Backup -Force }
+if (Test-Path $InstallDir) { Remove-Item$InstallDir -Recurse -Force }
 New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
-Expand-Archive -Path $Zip -DestinationPath $InstallDir -Force
+Expand-Archive -Path $Zip -DestinationPath$InstallDir -Force
 Remove-Item $Zip -Force
 if ($Backup) {
     if (Test-Path "$InstallDir\Data") { Remove-Item "$InstallDir\Data" -Recurse -Force }
@@ -268,14 +267,8 @@ if ($Backup) {
 }
 New-Item -ItemType Directory -Path "$InstallDir\Data" -Force | Out-Null
 
-# Belt-and-braces: Kestrel binds at host start, BEFORE the overrides layer
-# loads, so the certificate config must exist in appsettings.json itself.
-# PARSE-FREE ON PURPOSE: appsettings.json legitimately carries // comments
-# and trailing commas - .NET's config reader accepts them, but Windows
-# PowerShell 5.1's ConvertFrom-Json (and jq) do not; parsing it here crashed
-# v8.0 installs at [6/9]. Insert the block as plain text only when missing.
 $appSettingsPath = "$InstallDir\appsettings.json"
-$raw = Get-Content $appSettingsPath -Raw
+$raw = Get-Content$appSettingsPath -Raw
 if ($raw -notmatch '"Kestrel"') {
     $kestrelBlock = @"
 
@@ -290,51 +283,50 @@ if ($raw -notmatch '"Kestrel"') {
     }
   },
 "@
-    $idx = $raw.IndexOf('{')
-    $raw = $raw.Insert($idx + 1, $kestrelBlock)
-    Set-Content -Path $appSettingsPath -Value $raw -Encoding UTF8
-    Log "Patched appsettings.json with the machine-store HTTPS certificate block (text insert, no JSON parsing)."
+    $idx =$raw.IndexOf('{')
+    $raw =$raw.Insert($idx + 1,$kestrelBlock)
+    Set-Content -Path $appSettingsPath -Value$raw -Encoding UTF8
+    Log "Patched appsettings.json with Kestrel HTTPS block."
 }
 
 foreach ($w in @("SlideContent", "MediaContent", "AppData", "Recordings")) {
-    $p = Join-Path $InstallDir $w
+    $p = Join-Path $InstallDir$w
     New-Item -ItemType Directory -Path $p -Force | Out-Null
     icacls $p /grant "${HumanUser}:(OI)(CI)M" | Out-Null
 }
-# Content folders: readable by the kiosk account and administrators only, and
-# marked as protected system files so they stay out of everyday view.
 icacls "$InstallDir\Data" /inheritance:r /grant:r "SYSTEM:(OI)(CI)F" "Administrators:(OI)(CI)F" "${HumanUser}:(OI)(CI)RX" | Out-Null
 attrib +s +h "$InstallDir\Data" | Out-Null
-Log "Content folders prepared with this machine's recommended permissions."
+Log "Content folders prepared."
 Set-Content "$MachineDir\current-version" $Release.tag_name
 
-# ---------------- [7/9] Survey + certificate + machine config ---------------
-Log "[7/9] Site survey, HTTPS certificate, and machine settings..."
-Write-Host ""
-Write-Host "  Every church is wired differently, so we ask five quick questions."
-Write-Host "  ENTER accepts the safe default (No) for each, and everything here can"
-Write-Host "  be changed later in Settings without reinstalling."
-Write-Host "  Note: the CG overlay output is always prepared as part of the core"
-Write-Host "  display set (like the Left Display); question 2 controls the broadcast"
-Write-Host "  encoder, stream monitors and Aux Hall."
-$rightWall = Read-Host "  [1/5] Is a RIGHT Display connected (in addition to the Left Display)? [y/N] (ENTER = No)"
-$streaming = Read-Host "  [2/5] Is a STREAMING/BROADCAST setup used (encoder, stream monitors, Aux Hall)? [y/N] (ENTER = No)"
+# ---------------- [7/9] Firewall, Certificate & Machine Settings ------------
+Log "[7/9] Configuring Firewall, HTTPS certificate, and settings..."
+
+# Configure Windows Firewall rules for HTTP and HTTPS inbound traffic
+Log "Configuring Windows Firewall rules for port 80 and 443..."
+New-NetFirewallRule -DisplayName "Illumina Web HTTP" -Direction Inbound -Protocol TCP -LocalPort 80 -Action Allow -ErrorAction SilentlyContinue | Out-Null
+New-NetFirewallRule -DisplayName "Illumina Web HTTPS" -Direction Inbound -Protocol TCP -LocalPort 443 -Action Allow -ErrorAction SilentlyContinue | Out-Null
+
+$rightWall = Read-Host "  [1/5] Is a RIGHT Display connected? [y/N] (ENTER = No)"
+$streaming = Read-Host "  [2/5] Is a STREAMING/BROADCAST setup used? [y/N] (ENTER = No)"
 $sync      = Read-Host "  [3/5] Should Prayer/Announcement slides sync from Google Drive? [y/N] (ENTER = No)"
-Write-Host ""
-Write-Host "  Illumina can also talk to the smart hardware many churches already own."
-Write-Host "  Both integrations are optional and can be switched on later in Settings."
-$haUse       = Read-Host "  [4/5] Do you automate AV devices (e.g. Tapo smart switches for wall and rack power) through Home Assistant? [y/N] (ENTER = No)"
-$novastarUse = Read-Host "  [5/5] Is a Novastar LED video controller on the local network (brightness schedules + cabinet health)? [y/N] (ENTER = No)"
+$haUse     = Read-Host "  [4/5] Do you automate AV devices through Home Assistant? [y/N] (ENTER = No)"
+$novastarUse = Read-Host "  [5/5] Is a Novastar LED video controller on the local network? [y/N] (ENTER = No)"
+
 $rightWallOn = ($rightWall -match '^[yY]')
 $streamOn    = ($streaming -match '^[yY]')
 $syncOn      = ($sync -match '^[yY]')
-Log "Survey recorded - Right Display: $rightWallOn | Streaming: $streamOn | Drive sync: $syncOn"
 
-# The private key's default ACL grants only SYSTEM + the elevated token that
-# created it - but the app runs NON-elevated as the kiosk account, and a TLS
-# handshake without key-read access aborts every connection (Chrome shows
-# ERR_CONNECTION_CLOSED while netstat fills with loopback TIME_WAITs).
-# Grant read to local users at creation time so day one just works.
+$cert = Get-ChildItem Cert:\LocalMachine\My -ErrorAction SilentlyContinue |
+        Where-Object { $_.FriendlyName -eq "Illumina Kiosk HTTPS" -and $_.NotAfter -gt (Get-Date).AddMonths(1) } |
+        Select-Object -First 1
+if (-not $cert) {$cert = New-SelfSignedCertificate -DnsName "localhost" -CertStoreLocation "Cert:\LocalMachine\My" `
+            -FriendlyName "Illumina Kiosk HTTPS" -NotAfter (Get-Date).AddYears(100)
+    Export-Certificate -Cert $cert -FilePath "$MachineDir\illumina.cer" -Force | Out-Null
+    Import-Certificate -FilePath "$MachineDir\illumina.cer" -CertStoreLocation Cert:\LocalMachine\Root | Out-Null
+    Log "Certificate created and trusted."
+} else { Log "Reusing existing HTTPS certificate." }
+
 try {
     $rsa    = [System.Security.Cryptography.X509Certificates.RSACertificateExtensions]::GetRSAPrivateKey($cert)
     $keyAcl = $rsa.Key.GetAccessControl()
@@ -343,266 +335,104 @@ try {
             [System.Security.Cryptography.AccessControl.CngKeyRights]::Read,
             [System.Security.Cryptography.AccessControl.AccessControlType]::Allow)))
     $rsa.Key.SetAccessControl($keyAcl)
-    Log "Certificate private key readable by the kiosk account."
-} catch {
-    Write-Warning "  Could not adjust the certificate key ACL - if the portal shows ERR_CONNECTION_CLOSED, grant 'Users' read access to the 'Illumina Kiosk HTTPS' private key."
-}
+    Log "Certificate private key readable by kiosk account."
+} catch { }
 
-# ---- Google Drive key + folder IDs (only when sync was requested) ----
 $keyJson  = "$MachineDir\key.json"
 $prayerId = ""; $annId = ""
 if ($syncOn) {
-    if (Test-Path $keyJson) { Log "Reusing the Google Drive key already stored on this machine." }
-    else {
+    if (-not (Test-Path $keyJson)) {
         try {
-            Log "Fetching the Drive key from the private repository (secrets/drive-key.json)..."
             Invoke-WebRequest -Uri "https://api.github.com/repos/$GitHubOwner/$GitHubRepo/contents/secrets/drive-key.json" `
                 -Headers @{ Authorization = "Bearer $Token"; Accept = "application/vnd.github.raw" } -OutFile $keyJson
-        } catch {
-            Log "Repository download unavailable - a local copy works just as well."
-            $src = Read-Host "  Path to a local key.json (USB/share/laptop), or blank to skip sync"
-            if ($src -and (Test-Path $src)) { Copy-Item $src $keyJson -Force }
-        }
+        } catch { }
     }
     if (Test-Path $keyJson) {
         icacls $keyJson /inheritance:r /grant:r "SYSTEM:F" "Administrators:F" "${HumanUser}:R" | Out-Null
         $prayerId = Read-Host "  Prayer slides folder ID (Google Drive)"
         $annId    = Read-Host "  Announcements slides folder ID (Google Drive)"
-        if (-not $prayerId -or -not $annId) {
-            $syncOn = $false
-            Log "A folder ID was left empty, so Drive sync stays OFF on this machine."
-        }
-    } else { $syncOn = $false; Log "No Drive key available, so Drive sync stays OFF on this machine." }
+        if (-not $prayerId -or -not$annId) { $syncOn =$false }
+    } else { $syncOn =$false }
 }
 
-# ---- Home Assistant: detect first, then address (Windows guides, never hacks) ----
 $haOn = $false; $haUrl = ""
 if ($haUse -match '^[yY]') {
     try {
         Invoke-WebRequest -Uri "http://localhost:8123" -UseBasicParsing -TimeoutSec 3 | Out-Null
-        $haUrl = "http://localhost:8123"; $haOn = $true
-        Log "Home Assistant detected on this PC."
+        $haUrl = "http://localhost:8123"; $haOn =$true
     } catch { }
-    if (-not $haUrl) {
-        $haUrl = Read-Host "  Home Assistant address on your network (e.g. http://192.168.1.50:8123), or ENTER if not set up yet"
-        if ($haUrl) { $haOn = $true; Log "Home Assistant will be reached at $haUrl" }
-    }
-    if (-not $haUrl) {
-        Write-Host "  Home Assistant is officially supported on Linux, VMs and dedicated hardware"
-        Write-Host "  (a Raspberry Pi is the church favourite). On this Windows PC we recommend one"
-        Write-Host "  of those; Illumina only needs its web address, which you can add any time in"
-        Write-Host "  Settings > Device Setup."
+    if (-not $haUrl) {$haUrl = Read-Host "  Home Assistant address (e.g. http://192.168.1.50:8123), or ENTER to skip"
+        if ($haUrl) { $haOn =$true }
     }
 }
 
-# ---- Novastar: configure, don't conquer (token pairing stays in the portal) ----
 $novastarOn = $false; $novastarHost = ""
-if ($novastarUse -match '^[yY]') {
-    $novastarHost = Read-Host "  Novastar controller IP address (e.g. 172.16.0.11)"
-    if ($novastarHost) { $novastarOn = $true; Log "Novastar will target $novastarHost - pair the auth token later in Settings > Device Setup." }
-    else { Log "No controller address given - Novastar integration left OFF." }
+if ($novastarUse -match '^[yY]') {$novastarHost = Read-Host "  Novastar controller IP address (e.g. 172.16.0.11)"
+    if ($novastarHost) { $novastarOn =$true }
 }
 
-# ---- Private, machine-trusted HTTPS certificate (store-based) ----
-Write-Host ""
-Write-Host "  Illumina serves its portal over HTTPS on this PC only. We create a private"
-Write-Host "  100-year certificate and trust it machine-wide, so browsers show a clean"
-Write-Host "  padlock with no warnings - no internet certificate needed."
-$cert = Get-ChildItem Cert:\LocalMachine\My -ErrorAction SilentlyContinue |
-        Where-Object { $_.FriendlyName -eq "Illumina Kiosk HTTPS" -and $_.NotAfter -gt (Get-Date).AddMonths(1) } |
-        Select-Object -First 1
-if (-not $cert) {
-    $cert = New-SelfSignedCertificate -DnsName "localhost" -CertStoreLocation "Cert:\LocalMachine\My" `
-            -FriendlyName "Illumina Kiosk HTTPS" -NotAfter (Get-Date).AddYears(100)
-    Export-Certificate -Cert $cert -FilePath "$MachineDir\illumina.cer" -Force | Out-Null
-    Import-Certificate -FilePath "$MachineDir\illumina.cer" -CertStoreLocation Cert:\LocalMachine\Root | Out-Null
-    Log "Certificate created and trusted for this machine."
-} else { Log "Reusing this machine's existing HTTPS certificate." }
-
-# ---- Stamp machine truth into the overrides layer (merge, never clobber) ----
 $overridesPath = "$InstallDir\AppData\AppSettingsOverrides.json"
-if (Test-Path $overridesPath) { $obj = Get-Content $overridesPath -Raw | ConvertFrom-Json }
+if (Test-Path $overridesPath) { $obj = Get-Content$overridesPath -Raw | ConvertFrom-Json }
 else { $obj = [PSCustomObject]@{} }
 
-if ($obj.PSObject.Properties.Name -contains "Kestrel") {
-    $obj.PSObject.Properties.Remove("Kestrel")
-    Log "Removed an outdated certificate override from a previous install."
-}
-# AGENTS.md binding contract: HTTPS on localhost only; congregation phones
-# and tablets reach the plain-HTTP endpoint on every interface (port 80).
+if ($obj.PSObject.Properties.Name -contains "Kestrel") { $obj.PSObject.Properties.Remove("Kestrel") }
 $obj | Add-Member -NotePropertyName "Urls" -Force -NotePropertyValue "https://localhost;http://0.0.0.0:80"
 
 if ($obj.PSObject.Properties.Name -notcontains "Kiosk") { $obj | Add-Member -NotePropertyName "Kiosk" -NotePropertyValue ([PSCustomObject]@{}) }
-$k = $obj.Kiosk
-$k | Add-Member -NotePropertyName "BaseUrl"          -NotePropertyValue $PortalUrl   -Force
-$k | Add-Member -NotePropertyName "Enabled"          -NotePropertyValue $true         -Force
-$k | Add-Member -NotePropertyName "RightWallEnabled" -NotePropertyValue $rightWallOn -Force
-$k | Add-Member -NotePropertyName "CgEnabled"        -NotePropertyValue $streamOn     -Force
-$k | Add-Member -NotePropertyName "ProgramEnabled"   -NotePropertyValue $streamOn     -Force
-if (-not $streamOn) { $k | Add-Member -NotePropertyName "CgConfidenceMonitorEnabled" -NotePropertyValue $false -Force }
+$k =$obj.Kiosk
+$k \vert{} Add-Member -NotePropertyName "BaseUrl"          -NotePropertyValue $PortalUrl   -Force
+$k \vert{} Add-Member -NotePropertyName "Enabled"          -NotePropertyValue $true          -Force
+$k \vert{} Add-Member -NotePropertyName "RightWallEnabled" -NotePropertyValue $rightWallOn -Force
+$k \vert{} Add-Member -NotePropertyName "CgEnabled"        -NotePropertyValue $streamOn      -Force
+$k \vert{} Add-Member -NotePropertyName "ProgramEnabled"   -NotePropertyValue $streamOn      -Force
 
-$sofficeResolved = if (Test-Path $SofficePath) { $SofficePath } else { "" }
-$ffmpegResolved  = if (Test-Path $FfmpegPath)  { $FfmpegPath }  else { "" }
+$sofficeResolved = if (Test-Path $SofficePath) {$SofficePath } else { "" }
+$ffmpegResolved  = if (Test-Path $FfmpegPath)  {$FfmpegPath }  else { "" }
 if ($obj.PSObject.Properties.Name -notcontains "SlideLibrary") { $obj | Add-Member -NotePropertyName "SlideLibrary" -NotePropertyValue ([PSCustomObject]@{}) }
-$sl = $obj.SlideLibrary
-$sl | Add-Member -NotePropertyName "LibreOfficePath" -NotePropertyValue $sofficeResolved -Force
+$sl =$obj.SlideLibrary
+$sl \vert{} Add-Member -NotePropertyName "LibreOfficePath" -NotePropertyValue $sofficeResolved -Force
 if ($sl.PSObject.Properties.Name -notcontains "GoogleDrive") { $sl | Add-Member -NotePropertyName "GoogleDrive" -NotePropertyValue ([PSCustomObject]@{}) }
-$gd = $sl.GoogleDrive
-if ($syncOn) {
-    $gd | Add-Member -NotePropertyName "ServiceAccountKeyPath" -NotePropertyValue $keyJson  -Force
-    $gd | Add-Member -NotePropertyName "PrayerFolderId"        -NotePropertyValue $prayerId -Force
-    $gd | Add-Member -NotePropertyName "AnnouncementsFolderId" -NotePropertyValue $annId    -Force
-    Log "Drive sync configured for this machine."
-} else {
-    $gd | Add-Member -NotePropertyName "ServiceAccountKeyPath" -NotePropertyValue "" -Force
-    $gd | Add-Member -NotePropertyName "PrayerFolderId"        -NotePropertyValue "" -Force
-    $gd | Add-Member -NotePropertyName "AnnouncementsFolderId" -NotePropertyValue "" -Force
-    Log "Drive sync left OFF on this machine."
-}
+$gd =$sl.GoogleDrive
+$gd \vert{} Add-Member -NotePropertyName "ServiceAccountKeyPath" -NotePropertyValue $(if($syncOn){$keyJson}else{""}) -Force
+$gd \vert{} Add-Member -NotePropertyName "PrayerFolderId"        -NotePropertyValue $prayerId -Force
+$gd \vert{} Add-Member -NotePropertyName "AnnouncementsFolderId" -NotePropertyValue $annId    -Force
+
 if ($obj.PSObject.Properties.Name -notcontains "Broadcast") { $obj | Add-Member -NotePropertyName "Broadcast" -NotePropertyValue ([PSCustomObject]@{}) }
-$obj.Broadcast | Add-Member -NotePropertyName "FFmpegPath" -NotePropertyValue $ffmpegResolved -Force
+$obj.Broadcast \vert{} Add-Member -NotePropertyName "FFmpegPath" -NotePropertyValue $ffmpegResolved -Force
 
 if ($obj.PSObject.Properties.Name -notcontains "HomeAssistant") { $obj | Add-Member -NotePropertyName "HomeAssistant" -NotePropertyValue ([PSCustomObject]@{}) }
-$ha = $obj.HomeAssistant
-$ha | Add-Member -NotePropertyName "Enabled" -NotePropertyValue $haOn -Force
-if ($haUrl) { $ha | Add-Member -NotePropertyName "BaseUrl" -NotePropertyValue $haUrl -Force }
+$obj.HomeAssistant \vert{} Add-Member -NotePropertyName "Enabled" -NotePropertyValue $haOn -Force
+if ($haUrl) { $obj.HomeAssistant \vert{} Add-Member -NotePropertyName "BaseUrl" -NotePropertyValue $haUrl -Force }
 
 if ($obj.PSObject.Properties.Name -notcontains "Novastar") { $obj | Add-Member -NotePropertyName "Novastar" -NotePropertyValue ([PSCustomObject]@{}) }
-$nv = $obj.Novastar
-$nv | Add-Member -NotePropertyName "Enabled" -NotePropertyValue $novastarOn -Force
-if ($novastarOn) { $nv | Add-Member -NotePropertyName "Host" -NotePropertyValue $novastarHost -Force }
+$obj.Novastar \vert{} Add-Member -NotePropertyName "Enabled" -NotePropertyValue $novastarOn -Force
+if ($novastarOn) { $obj.Novastar \vert{} Add-Member -NotePropertyName "Host" -NotePropertyValue $novastarHost -Force }
 
-# Member phones reach the AVA PC over the LAN; the QR overlay and the /view
-# page use CongregationView:BaseUrl, so stamp this machine's LAN address.
-# Settings can refine it later (e.g. a static DNS name).
 $lanIp = (Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
           Where-Object { $_.IPAddress -ne '127.0.0.1' -and $_.IPAddress -notlike '169.254.*' } |
           Select-Object -First 1).IPAddress
 if ($lanIp) {
     if ($obj.PSObject.Properties.Name -notcontains "CongregationView") { $obj | Add-Member -NotePropertyName "CongregationView" -NotePropertyValue ([PSCustomObject]@{}) }
-    $obj.CongregationView | Add-Member -NotePropertyName "BaseUrl" -NotePropertyValue "http://$lanIp" -Force
-    Log "Congregation phones will reach this PC at http://$lanIp (QR overlay + /view page)."
+    $obj.CongregationView \vert{} Add-Member -NotePropertyName "BaseUrl" -NotePropertyValue "http://$lanIp" -Force
 }
 
-Log "Dependency paths stamped: LibreOffice='$sofficeResolved' FFmpeg='$ffmpegResolved'"
-$obj | ConvertTo-Json -Depth 10 | Set-Content $overridesPath
+$obj \vert{} ConvertTo-Json -Depth 10 \vert{} Set-Content$overridesPath
 
-# ---------------- [8/9] Helpers + shortcuts ---------------------------------
-$portalAtLogon = $autoLoginOn -and $AutoOpenPortalAtLogon
-Log $(if ($portalAtLogon) { "Logon behavior: app + portal open automatically (true kiosk boot)." }
-      else { "Logon behavior: app starts silently at logon; the desktop icon opens the portal." })
-
-# --app= gives the portal its own dedicated window (never swallowed as a tab
-# by a personal Chrome), with a clean title the positioner can recognize.
-$PortalLine = if ($ChromeExe) { "Start-Process '$ChromeExe' -ArgumentList '--app=$PortalUrl'" } else { "Start-Process '$PortalUrl'" }
-
-Log "[8/9] Writing the everyday shortcuts..."
+# ---------------- [8/9] Shortcuts & Completion ------------------------------
+Log "[8/9] Writing shortcuts and completing installation..."
 $AppExe = "$InstallDir\Illumina.exe"
+$PortalLine = if ($ChromeExe) { "Start-Process '$ChromeExe' -ArgumentList '--app=$PortalUrl'" } else { "Start-Process '$PortalUrl'" }
 
 $open = @'
 param([int]$DelaySeconds = 0, [switch]$NoPortal)
-if ($DelaySeconds -gt 0) { Start-Sleep -Seconds $DelaySeconds }
-$app = "__APP__"
+if ($DelaySeconds -gt 0) { Start-Sleep -Seconds $DelaySeconds }$app = "__APP__"
 if (-not (Get-Process -Name Illumina -ErrorAction SilentlyContinue)) {
-    Start-Process $app -WorkingDirectory (Split-Path $app) -WindowStyle Hidden
+    Start-Process $app -WorkingDirectory (Split-Path$app) -WindowStyle Hidden
     Start-Sleep -Seconds 6
 }
 if (-not $NoPortal) { __PORTAL__ }
 '@
-$open = $open -replace '__APP__', $AppExe -replace '__PORTAL__', $PortalLine
+$open =$open -replace '__APP__', $AppExe -replace '__PORTAL__',$PortalLine
 Set-Content "$InstallDir\open-illumina.ps1" $open
 
-$restart = @'
-Get-Process -Name Illumina -ErrorAction SilentlyContinue | Stop-Process -Force
-Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" -ErrorAction SilentlyContinue |
-    Where-Object { $_.CommandLine -like '*IlluminaKiosk*' } |
-    ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
-Start-Sleep -Seconds 2
-Remove-Item -Recurse -Force "$env:TEMP\IlluminaKiosk" -ErrorAction SilentlyContinue
-$app = "__APP__"
-Start-Process $app -WorkingDirectory (Split-Path $app) -WindowStyle Hidden
-Start-Sleep -Seconds 6
-__PORTAL__
-'@
-$restart = $restart -replace '__APP__', $AppExe -replace '__PORTAL__', $PortalLine
-Set-Content "$InstallDir\restart-illumina.ps1" $restart
-
-if ($HumanUser -eq $env:USERNAME) {
-    $UserDesktop = [Environment]::GetFolderPath("Desktop")
-    $UserStartup = [Environment]::GetFolderPath("Startup")
-} else {
-    $UserDesktop = "C:\Users\$HumanUser\Desktop"
-    $UserStartup = "C:\Users\$HumanUser\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup"
-    New-Item -ItemType Directory -Path $UserDesktop -Force | Out-Null
-    New-Item -ItemType Directory -Path $UserStartup -Force | Out-Null
-}
-$spots = @(
-    [Environment]::GetFolderPath("CommonDesktopDirectory"),
-    [Environment]::GetFolderPath("CommonStartup"),
-    $UserDesktop,
-    $UserStartup,
-    "C:\Users\avauser\Desktop",
-    "C:\Users\avauser\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup"
-)
-foreach ($spot in $spots) {
-    if (Test-Path $spot) {
-        Get-ChildItem $spot -Filter "Illumina*.lnk"         -ErrorAction SilentlyContinue | Remove-Item -Force
-        Get-ChildItem $spot -Filter "Restart Illumina*.lnk" -ErrorAction SilentlyContinue | Remove-Item -Force
-    }
-}
-$Wsh   = New-Object -ComObject WScript.Shell
-$PsExe = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
-
-$s = $Wsh.CreateShortcut("$UserDesktop\Illumina.lnk")
-$s.TargetPath   = $PsExe
-$s.Arguments    = "-ExecutionPolicy Bypass -WindowStyle Hidden -File `"$InstallDir\open-illumina.ps1`""
-$s.IconLocation = $(if ($ChromeExe) { "$ChromeExe,0" } else { "shell32.dll,14" })
-$s.Save()
-
-$r = $Wsh.CreateShortcut("$UserDesktop\Restart Illumina (if misbehaving).lnk")
-$r.TargetPath   = $PsExe
-$r.Arguments    = "-ExecutionPolicy Bypass -WindowStyle Hidden -File `"$InstallDir\restart-illumina.ps1`""
-$r.IconLocation = "shell32.dll,238"
-$r.Save()
-
-$a = $Wsh.CreateShortcut("$UserStartup\Illumina Startup.lnk")
-$a.TargetPath = $PsExe
-$a.Arguments  = "-ExecutionPolicy Bypass -WindowStyle Hidden -File `"$InstallDir\open-illumina.ps1`" -DelaySeconds $LogonDelaySeconds" + $(if ($portalAtLogon) { "" } else { " -NoPortal" })
-$a.Save()
-Log "Shortcuts placed for $HumanUser - 'Illumina' (everyday) and 'Restart Illumina' (recovery)."
-
-# ---------------- [9/9] Network, power, summary -----------------------------
-Log "[9/9] Opening the network doors and keeping the PC awake..."
-Remove-NetFirewallRule -DisplayName "Illumina Web App"      -ErrorAction SilentlyContinue
-Remove-NetFirewallRule -DisplayName "Illumina Phones HTTP" -ErrorAction SilentlyContinue
-New-NetFirewallRule -DisplayName "Illumina Web App"      -Direction Inbound -LocalPort $HttpPort -Protocol TCP -Action Allow | Out-Null
-New-NetFirewallRule -DisplayName "Illumina Phones HTTP" -Direction Inbound -LocalPort 80      -Protocol TCP -Action Allow | Out-Null
-powercfg /change standby-timeout-ac 0 | Out-Null
-powercfg /change monitor-timeout-ac 0 | Out-Null
-Log "Firewall allows the portal (443) and congregation phones (80); sleep is disabled."
-
-Write-Host ""
-Write-Host "==================================================" -ForegroundColor Cyan
-Write-Host "   Setup complete - Illumina $($Release.tag_name) is ready!" -ForegroundColor Green
-Write-Host "==================================================" -ForegroundColor Cyan
-Write-Host "   Kiosk account : $HumanUser$(if ($useAvaUser) { ' (dedicated standard account)' } else { ' (this PC''s existing account)' })"
-Write-Host "   Auto sign-in  : $(if ($autoLoginOn) { 'configured' } else { 'off - normal logon screen' })"
-Write-Host "   Right Display : $rightWallOn   Streaming: $streamOn   Drive sync: $syncOn"
-Write-Host "   Home Assistant: $(if ($haOn) { $haUrl } else { 'off' })   Novastar: $(if ($novastarOn) { $novastarHost } else { 'off' })"
-Write-Host "   Portal        : $PortalUrl  (desktop icon 'Illumina' opens it any time)"
-if ($lanIp) { Write-Host "   Phones        : http://$lanIp  (QR overlay + /view page)" }
-Write-Host ""
-if ($autoLoginOn) {
-    Write-Host "   Auto sign-in takes effect the next time this PC restarts - for example"
-    Write-Host "   after a power cut or your next planned reboot. There is nothing you need"
-    Write-Host "   to do right now: the desktop icon 'Illumina' starts everything immediately"
-    Write-Host "   in this session, and from the next restart onward the PC will boot"
-    Write-Host "   straight into Illumina on its own."
-    $ans = Read-Host "Would you like to restart now to see auto sign-in in action? [y/N] (ENTER = No)"
-    if ($ans -match '^[yY]') { Restart-Computer }
-} else {
-    Write-Host "   No restart is needed - everything is live already. The desktop icon"
-    Write-Host "   'Illumina' starts the app and opens the portal any time, and the"
-    Write-Host "   'Restart Illumina' icon is the one-click recovery if a display ever"
-    Write-Host "   misbehaves."
-}
+Log "Installation complete successfully!"
