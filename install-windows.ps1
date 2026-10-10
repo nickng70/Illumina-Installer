@@ -564,7 +564,7 @@ Write-Host "   Auto sign-in  : $(if ($autoLoginOn) { 'configured' } else { 'off 
 Write-Host "   Right Display : $rightWallOn   Streaming: $streamOn   Drive sync: $syncOn"
 Write-Host "   Home Assistant: $(if ($haOn) { $haUrl } else { 'off' })   Novastar: $(if ($novastarOn) { $novastarHost } else { 'off' })"
 Write-Host ""
-Write-Host "  🎉 You are all set! Here is how to start your first session:" -ForegroundColor Yellow
+Write-Host "  Congratulations! You are all set! Here is how to start your first session:" -ForegroundColor Yellow
 Write-Host ""
 Write-Host "   1. RESTART this PC (or double-click 'Restart Illumina Backend'" -ForegroundColor White
 Write-Host "      on the desktop). This starts the engine in the background." -ForegroundColor White
