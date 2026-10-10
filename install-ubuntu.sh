@@ -2,28 +2,24 @@
 # ==============================================================================
 # Illumina AVA PC Installer - Ubuntu 22.04/24.04 LTS (v8.0 FINAL)
 # - Friendly sudo check; nothing changes before it passes
-# - Provisions media engines via apt: LibreOffice, FFmpeg, wmctrl, and Google
-#   Chrome (official .deb) if missing
+# - Provisions media engines via apt: LibreOffice, FFmpeg, wmctrl, zenity, 
+#   and Google Chrome (official .deb) if missing
 # - Five-question survey (Right Display / Streaming / Drive sync / device
-#   automation / Novastar); ENTER = No everywhere; Sabbath-aware wording
+#   automation / Novastar brightness); ENTER = No everywhere
 # - Device automation: detect Home Assistant first, then address, then offer
 #   a real Docker install here (Ubuntu is officially supported territory)
 # - Patches the INSTALLED appsettings.json with the PFX Kestrel block when
-#   the release zip predates it - PARSE-FREE awk text insert, because
-#   appsettings.json legitimately carries // comments and trailing commas
-#   that jq rejects (Kestrel binds at host start, before overrides load)
-# - Grants the AVA PC account read access to the GitHub token so the in-app
-#   UpdateService can fetch manifests and content updates
+#   the release zip predates it - PARSE-FREE awk text insert
+# - Grants the AVA PC account read access to the GitHub token for in-app updates
 # - Binding contract per AGENTS.md: HTTPS localhost-only + HTTP on all
 #   interfaces; congregation QR BaseUrl auto-stamped from the LAN address
 # - Resolved dependency paths + integration settings stamped into the
 #   per-machine overrides layer (merge, never clobber)
 # - Clean [1]/[2] AVA PC account menu; GDM3 auto sign-in; ufw; sleep masked
-# - Helpers wait for kiosk windows to settle, then bring the main portal
-#   (title exactly "Illumina") back to the front - first-launch focus fix
-# - HTTPS via a private 100-year PFX + system CA trust for a clean padlock
-# - Human-facing labels use "Display"; internal config keys keep their
-#   legacy names for backwards compatibility with deployed churches
+# - Simplified, bulletproof desktop shortcuts (Native Chrome portal +
+#   Backend manager with friendly zenity UI prompts)
+# - Human-facing labels use "Display" and "Sabbath"; internal config keys
+#   keep their legacy names for backwards compatibility
 # ==============================================================================
 set -e
 
@@ -58,26 +54,27 @@ echo "   Illumina AVA PC Installer - Ubuntu (v8.0)      "
 echo "   Guided setup for a safe, self-starting AVA PC  "
 echo "=================================================="
 echo ""
-echo "  Welcome! This installer prepares this PC to run Illumina around the"
-echo "  clock: it fetches the latest release and the media engines it needs,"
-echo "  configures secure local HTTPS, and tailors the displays and smart"
-echo "  integrations to your hardware. Every question explains itself, and"
-echo "  pressing ENTER always accepts the safe, recommended default."
+echo "  Welcome! This installer prepares this PC to run Illumina."
+echo "  1. Fetches the latest release and the media engines it needs,"
+echo "  2. Configures secure local HTTPS with local SSL certificate and"
+echo "  3. Integrations with your hardware."
+echo "  Note: To change or customize advanced options,"
+echo "        navigate to Menu->Settings."
 
 # ----------------------------- [1/9] DEPENDENCIES ---------------------------
-echo -e "\n==> [1/9] Checking essential tools..."
+echo -e "\n==> [1/9] Accessing GitHub Illumina repository..."
 apt-get update -qq > /dev/null
-apt-get install -y -qq curl unzip jq openssl wmctrl > /dev/null
-echo "  Core tools (curl, unzip, jq, openssl, wmctrl) are ready."
+# Added zenity for the native Linux pop-up message box
+apt-get install -y -qq curl unzip jq openssl wmctrl zenity > /dev/null
+echo "  Core tools (curl, unzip, jq, openssl, wmctrl, zenity) are ready."
 
 # ----------------------------- [2/9] GITHUB TOKEN ---------------------------
-echo -e "\n==> [2/9] Release access token..."
 mkdir -p "$MACHINE_DIR"
 TOKEN_FILE="$MACHINE_DIR/github-token"
 if [ -n "$GITHUB_TOKEN" ]; then
     TOKEN="$GITHUB_TOKEN"; echo "  Using the token from this session's environment."
 elif [ -f "$TOKEN_FILE" ]; then
-    TOKEN=$(cat "$TOKEN_FILE"); echo "  Reusing the token stored on this machine - nothing to type."
+    TOKEN=$(cat "$TOKEN_FILE"); echo "  Reusing the token stored on this machine."
 else
     echo "  Illumina's release packages live in a private repository, so we need"
     echo "  a read-only GitHub token once; it is then stored securely on this PC."
@@ -88,7 +85,7 @@ else
 fi
 
 # ----------------------------- [3/9] DOWNLOAD RELEASE -----------------------
-echo -e "\n==> [3/9] Downloading the latest Illumina release..."
+echo -e "\n==> [2/9] Downloading the latest Illumina release..."
 RELEASE_JSON=$(curl -s -H "Authorization: Bearer $TOKEN" -H "Accept: application/vnd.github+json" \
     "https://api.github.com/repos/nickng70/Illumina-Releases/releases/latest")
 TAG_NAME=$(echo "$RELEASE_JSON" | jq -r '.tag_name')
@@ -101,10 +98,10 @@ curl -s -L -H "Authorization: Bearer $TOKEN" -H "Accept: application/octet-strea
 echo "  Release $TAG_NAME downloaded."
 
 # ----------------------------- [4/9] MEDIA ENGINES & BROWSER ----------------
-echo -e "\n==> [4/9] Provisioning media engines and the display browser..."
-echo "  Illumina relies on three companions: LibreOffice (converts slide decks),"
-echo "  FFmpeg (remuxes the broadcast feed), and Chrome (renders every display)."
-echo "  Anything missing is installed now, straight from the internet."
+echo -e "\n==> [3/9] Provisioning media engines and the display browser..."
+echo "  Illumina relies on three companions: LibreOffice (converts slide"
+echo "  decks), FFmpeg (remuxes the broadcast feed), and Chrome (renders every"
+echo "  display). Anything missing will be installed now."
 apt-get install -y -qq libreoffice ffmpeg > /dev/null
 echo "  LibreOffice and FFmpeg are ready."
 
@@ -122,10 +119,10 @@ if [ -z "$CHROME_BIN" ]; then
     rm -f /tmp/chrome.deb
     CHROME_BIN=$(resolve_chrome || true)
 fi
-if [ -n "$CHROME_BIN" ]; then echo "  Chrome ready at $CHROME_BIN"; else echo "  WARNING: no Chrome/Chromium found - displays cannot launch."; fi
+if [ -n "$CHROME_BIN" ]; then echo "  Chrome ready at $CHROME_BIN"; else echo "  WARNING: no Chrome/Chromium found - the portal will fall back to the default browser."; fi
 
 # ----------------------------- [5/9] PAUSE PREVIOUS SESSION -----------------
-echo -e "\n==> [5/9] Pausing any running Illumina session..."
+echo -e "\n==> [4/9] Pausing any running Illumina session..."
 pkill -f "$INSTALL_DIR/Illumina" || true
 pkill -f "IlluminaKiosk" || true
 sleep 2
@@ -133,7 +130,7 @@ rm -rf /tmp/IlluminaKiosk || true
 echo "  Previous session paused - your open browser tabs and files are untouched."
 
 # ----------------------------- [6/9] AVA PC ACCOUNT & SIGN-IN ---------------
-echo -e "\n==> [6/9] Choosing the AVA PC account and sign-in behavior..."
+echo -e "\n==> [5/9] Choosing the AVA PC account and sign-in behavior..."
 echo ""
 echo "  How will this AVA PC be used?"
 echo ""
@@ -144,7 +141,7 @@ echo "      and provides the safest environment for Sabbath services."
 echo ""
 echo "  [2] Run Illumina using $INTERACTIVE_USER"
 echo "      Uses your current Linux account ($INTERACTIVE_USER)."
-echo "      Ideal for personal laptops, IT testing, or initial setup by an administrator."
+echo "      Choose this for personal laptops or if you are just testing Illumina."
 read -p "  Select setup type (press ENTER for 1): " MODE
 USE_AVA_USER=true; [ "$MODE" = "2" ] && USE_AVA_USER=false
 
@@ -170,15 +167,13 @@ if [ "$USE_AVA_USER" = true ]; then
 else
     HUMAN_USER="$INTERACTIVE_USER"
     echo ""
-    echo "  Auto sign-in lets the PC boot straight into Illumina after a power cut -"
-    echo "  no volunteer needs to type a password on Sabbath morning. On a personal"
-    echo "  laptop, you may prefer the normal logon screen instead."
-    read -p "  Enable auto sign-in for $HUMAN_USER? [y/N] (ENTER = No; any existing auto sign-in is then turned off): " WANT_AUTO
+    echo "  Auto sign-in lets the PC boot straight into Illumina without having to login."
+    echo "  Choose No if this is your own laptop or to disable Auto sign-in."
+    read -p "  Enable auto sign-in for $HUMAN_USER? [y/N] (ENTER = No): " WANT_AUTO
     if [[ "$WANT_AUTO" =~ ^[yY]$ ]]; then AUTO_LOGIN_ON=true; echo "  Auto sign-in enabled for $HUMAN_USER."; fi
 fi
 
-# Grant the AVA PC account read access to the GitHub token so the in-app
-# UpdateService can fetch manifests and content updates from the private repo.
+# Grant the AVA PC account read access to the GitHub token
 if [ -f "$TOKEN_FILE" ]; then
     chown root:"$HUMAN_USER" "$TOKEN_FILE"
     chmod 640 "$TOKEN_FILE"
@@ -201,7 +196,7 @@ else
 fi
 
 # ----------------------------- [7/9] APP FILES & PERMISSIONS ----------------
-echo -e "\n==> [7/9] Installing Illumina and preparing its content folders..."
+echo -e "\n==> [6/9] Installing Illumina and preparing its content folders..."
 if [ -d "$INSTALL_DIR/Data" ]; then mv "$INSTALL_DIR/Data" /tmp/illumina-data-backup; fi
 rm -rf "$INSTALL_DIR"; mkdir -p "$INSTALL_DIR"
 unzip -q "$ZIP_FILE" -d "$INSTALL_DIR"; rm -f "$ZIP_FILE"
@@ -213,31 +208,30 @@ for W_DIR in SlideContent MediaContent AppData Recordings; do
     chown -R "$HUMAN_USER:$HUMAN_USER" "$INSTALL_DIR/$W_DIR"
     chmod 755 "$INSTALL_DIR/$W_DIR"
 done
-# Native POSIX lockdown: only the AVA PC account may read or even list this
-# folder - no hidden-attribute tricks needed on Linux.
 chown -R "$HUMAN_USER:$HUMAN_USER" "$INSTALL_DIR/Data"
 chmod 500 "$INSTALL_DIR/Data"
 echo "  Content folders prepared with native Linux permissions (locked to $HUMAN_USER)."
 echo "$TAG_NAME" > "$MACHINE_DIR/current-version"
 
 # ----------------------------- [8/9] SURVEY, CERT, OVERRIDES ----------------
-echo -e "\n==> [8/9] Site survey, HTTPS certificate, and machine settings..."
+echo -e "\n==> [7/9] Site survey, HTTPS certificate, and machine settings..."
 echo ""
 echo "  Every church is wired differently, so we ask five quick questions."
-echo "  ENTER accepts the safe default (No) for each."
+echo "  ENTER accepts the safe default (No) for each, and everything here can"
+echo "  be changed later in Menu->Settings."
 echo "  Note: the CG overlay output is always prepared as part of the core"
 echo "  display set (like the Left Display); question 2 controls the broadcast"
 echo "  encoder, stream monitors and Aux Hall."
-read -p "  [1/5] Is a RIGHT Display connected (in addition to the Left Display)? [y/N] (ENTER = No): " R_WALL
-read -p "  [2/5] Is a STREAMING/BROADCAST setup used (encoder, stream monitors, Aux Hall)? [y/N] (ENTER = No): " STREAM
-read -p "  [3/5] Should Prayer/Announcement slides sync from Google Drive? [y/N] (ENTER = No): " SYNC
+read -p "  [1/5] Do you have a RIGHT Display (in addition to the Left Display)? [y/N] (ENTER = No): " R_WALL
+read -p "  [2/5] Enable STREAMING display (for streaming and Aux Hall displays)? [y/N] (ENTER = No): " STREAM
+read -p "  [3/5] Retrieve Prayer/Announcement slides from Google Drive? [y/N] (ENTER = No): " SYNC
 echo ""
 echo "  Illumina can also talk to the smart hardware many churches already own."
 echo "  Both integrations are optional and can be switched on later in Settings."
 echo "  Device control runs through Home Assistant; LED brightness schedules and"
 echo "  cabinet health through the Novastar controller."
 read -p "  [4/5] Automatically control devices (e.g. Tapo smart plugs to power off/on LED walls)? [y/N] (ENTER = No): " HA_USE
-read -p "  [5/5] Is a Novastar LED video controller on the local network (brightness schedules + cabinet health)? [y/N] (ENTER = No): " NV_USE
+read -p "  [5/5] Automatically control brightness on Novastar Video Controller? [y/N] (ENTER = No): " NV_USE
 RIGHT_ON=false;  [[ "$R_WALL" =~ ^[yY]$ ]] && RIGHT_ON=true
 STREAM_ON=false; [[ "$STREAM" =~ ^[yY]$ ]] && STREAM_ON=true
 SYNC_ON=false;   [[ "$SYNC"   =~ ^[yY]$ ]] && SYNC_ON=true
@@ -259,7 +253,6 @@ if [ "$SYNC_ON" = true ]; then
     fi
 fi
 
-# ---- Home Assistant: detect, address, and (on Ubuntu) offer a real install
 HA_ON=false; HA_URL=""
 if [[ "$HA_USE" =~ ^[yY]$ ]]; then
     if curl -s -o /dev/null --max-time 3 http://localhost:8123; then
@@ -286,12 +279,13 @@ if [[ "$HA_USE" =~ ^[yY]$ ]]; then
             HA_URL="http://localhost:8123"; HA_ON=true
             echo "  Home Assistant installed - its dashboard appears at http://localhost:8123 once first boot finishes (1-2 minutes)."
         else
-            echo "  No problem - you can add the address any time in Settings > Device Setup."
+            echo "  Home Assistant is officially supported on Linux, VMs and dedicated hardware"
+            echo "  (a Raspberry Pi is the church favourite). Illumina only needs its web"
+            echo "  address, which you can add any time in Settings > Device Setup."
         fi
     fi
 fi
 
-# ---- Novastar: configure, don't conquer (token pairing stays in the portal)
 NV_ON=false; NV_HOST=""
 if [[ "$NV_USE" =~ ^[yY]$ ]]; then
     read -p "  Novastar controller IP address (e.g. 172.16.0.11): " NV_HOST
@@ -311,12 +305,6 @@ rm -f /tmp/illumina.key /tmp/illumina.crt
 chown "$HUMAN_USER:$HUMAN_USER" "$PFX_PATH"; chmod 400 "$PFX_PATH"
 echo "  Certificate created, trusted system-wide, and ready for Kestrel."
 
-# Belt-and-braces: Kestrel binds at host start, BEFORE the overrides layer
-# loads, so the PFX path must exist in appsettings.json itself.
-# PARSE-FREE ON PURPOSE: appsettings.json legitimately carries // comments
-# and trailing commas that jq rejects. awk inserts the block as plain text
-# after the opening brace, only when the block is missing. (awk, not sed:
-# the PFX path contains '/' characters that would break sed's delimiters.)
 if [ -f "$INSTALL_DIR/appsettings.json" ] && ! grep -q '"Kestrel"' "$INSTALL_DIR/appsettings.json"; then
     awk -v pfx="$PFX_PATH" -v pass="$PFX_PASS" '
         NR==1 && $0 ~ /^[[:space:]]*\{/ {
@@ -337,17 +325,12 @@ if [ -f "$INSTALL_DIR/appsettings.json" ] && ! grep -q '"Kestrel"' "$INSTALL_DIR
     echo "  Patched appsettings.json with the HTTPS certificate path (text insert)."
 fi
 
-# Member phones reach the AVA PC over the LAN; stamp this machine's address
-# so the congregation QR overlay and /view page work from day one.
 LAN_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
 CV_URL=""; [ -n "$LAN_IP" ] && CV_URL="http://$LAN_IP"
 
 OVERRIDES="$INSTALL_DIR/AppData/AppSettingsOverrides.json"
 mkdir -p "$INSTALL_DIR/AppData"
 [ -f "$OVERRIDES" ] || echo '{}' > "$OVERRIDES"
-# Merge (never clobber): existing Settings-saved values survive re-installs.
-# NOTE: Kestrel is handled in appsettings.json above, NOT here - the overrides
-# layer loads after Kestrel's first bind and could never save it.
 jq \
   --argjson right "$RIGHT_ON" --argjson stream "$STREAM_ON" --argjson sync "$SYNC_ON" \
   --argjson haon "$HA_ON" --arg haurl "$HA_URL" \
@@ -377,50 +360,26 @@ echo "  Dependency paths stamped: LibreOffice='/usr/bin/soffice' FFmpeg='/usr/bi
 [ -n "$CV_URL" ] && echo "  Congregation phones will reach this PC at $CV_URL (QR overlay + /view page)."
 
 # ----------------------------- [9/9] HELPERS, SHORTCUTS, NETWORK ------------
-echo -e "\n==> [9/9] Writing shortcuts, configuring firewall, and keeping the PC awake..."
+echo -e "\n==> [8/9] Writing the everyday shortcuts..."
 CHROME_BIN_SAFE=${CHROME_BIN:-/usr/bin/google-chrome}
 
-# Everyday icon: start the app if it isn't running, then open the portal.
-# The trailing focus pass is the first-launch fix: the backend launches the
-# fullscreen kiosk windows a few seconds after the portal appears, and those
-# can bury it - so we wait for them to settle and pull the portal (window
-# title exactly "Illumina") back to the front.
-cat <<EOF > "$INSTALL_DIR/open-illumina.sh"
+# The Backend Manager: Kills any existing backend, starts a fresh one hidden,
+# and pops up a friendly native Linux message box (via zenity) telling the 
+# volunteer that the engine is ready and they can now open the portal.
+cat <<EOF > "$INSTALL_DIR/start-backend.sh"
 #!/bin/bash
 APP="$INSTALL_DIR/Illumina"
-if ! pgrep -f "\$APP" > /dev/null; then
-    nohup "\$APP" > /dev/null 2>&1 &
-    sleep 6
-fi
-$CHROME_BIN_SAFE --app=$PORTAL_URL --user-data-dir=/tmp/IlluminaPortal > /dev/null 2>&1 &
-sleep 8
-if command -v wmctrl > /dev/null 2>&1; then
-    wmctrl -F -a "Illumina" > /dev/null 2>&1 || true
-elif command -v xdotool > /dev/null 2>&1; then
-    xdotool search --name "^Illumina\$" windowactivate > /dev/null 2>&1 || true
-fi
-EOF
+pkill -f "\$APP" || true
+sleep 1
+nohup "\$APP" > /dev/null 2>&1 &
 
-# Restart icon: the ONE place that tears down and relaunches - only Illumina
-# and its own kiosk Chrome profiles are stopped, never the operator's
-# personal browser. Same trailing focus pass as the everyday icon.
-cat <<EOF > "$INSTALL_DIR/restart-illumina.sh"
-#!/bin/bash
-pkill -f "$INSTALL_DIR/Illumina" || true
-pkill -f "IlluminaKiosk" || true
-sleep 2
-rm -rf /tmp/IlluminaKiosk || true
-nohup "$INSTALL_DIR/Illumina" > /dev/null 2>&1 &
-sleep 6
-$CHROME_BIN_SAFE --app=$PORTAL_URL --user-data-dir=/tmp/IlluminaPortal > /dev/null 2>&1 &
-sleep 8
-if command -v wmctrl > /dev/null 2>&1; then
-    wmctrl -F -a "Illumina" > /dev/null 2>&1 || true
-elif command -v xdotool > /dev/null 2>&1; then
-    xdotool search --name "^Illumina\$" windowactivate > /dev/null 2>&1 || true
+if [ "\$1" != "--silent" ]; then
+    if command -v zenity > /dev/null 2>&1; then
+        zenity --info --title="Illumina AVA PC" --text="The Illumina backend is now running in the background.\n\nPlease click the 'Illumina Portal' shortcut on your desktop to open the control panel." --width=400 > /dev/null 2>&1 || true
+    fi
 fi
 EOF
-chmod +x "$INSTALL_DIR/open-illumina.sh" "$INSTALL_DIR/restart-illumina.sh"
+chmod +x "$INSTALL_DIR/start-backend.sh"
 
 DESKTOP_DIR="$USER_HOME/Desktop"
 AUTOSTART_DIR="$USER_HOME/.config/autostart"
@@ -439,13 +398,23 @@ EOF
     chown "$HUMAN_USER:$HUMAN_USER" "$FILE_PATH"; chmod +x "$FILE_PATH"
     if command -v gio &> /dev/null; then sudo -u "$HUMAN_USER" gio set "$FILE_PATH" metadata::trusted true 2>/dev/null || true; fi
 }
-create_desktop_file "$DESKTOP_DIR/illumina.desktop" "Illumina" "$INSTALL_DIR/open-illumina.sh"
-create_desktop_file "$DESKTOP_DIR/restart-illumina.desktop" "Restart Illumina" "$INSTALL_DIR/restart-illumina.sh"
-if [ "$AUTO_LOGIN_ON" = true ]; then
-    create_desktop_file "$AUTOSTART_DIR/illumina.desktop" "Illumina" "$INSTALL_DIR/open-illumina.sh"
-fi
-echo "  Shortcuts placed for $HUMAN_USER."
 
+# Clean up old shortcuts
+rm -f "$DESKTOP_DIR"/illumina*.desktop "$DESKTOP_DIR"/restart*.desktop "$AUTOSTART_DIR"/illumina*.desktop 2>/dev/null || true
+
+# 1. The Portal Shortcut (Native Chrome, no wrapper)
+create_desktop_file "$DESKTOP_DIR/illumina-portal.desktop" "Illumina Portal" "$CHROME_BIN_SAFE --app=$PORTAL_URL"
+
+# 2. The Backend Restart Shortcut (Shows the friendly zenity pop-up)
+create_desktop_file "$DESKTOP_DIR/restart-illumina.desktop" "Restart Illumina Backend" "$INSTALL_DIR/start-backend.sh"
+
+# 3. The Auto-Start Shortcut (Runs silently on boot)
+if [ "$AUTO_LOGIN_ON" = true ]; then
+    create_desktop_file "$AUTOSTART_DIR/illumina-backend.desktop" "Illumina Backend" "$INSTALL_DIR/start-backend.sh --silent"
+fi
+echo "  Shortcuts placed for $HUMAN_USER - 'Illumina Portal' (everyday) and 'Restart Illumina Backend' (recovery)."
+
+echo -e "\n==> [9/9] Opening the network doors and keeping the PC awake..."
 if command -v ufw &> /dev/null; then
     ufw allow 443/tcp > /dev/null; ufw allow 80/tcp > /dev/null
 fi
@@ -461,20 +430,19 @@ echo "   AVA PC Account: $HUMAN_USER"
 echo "   Auto sign-in  : $([ "$AUTO_LOGIN_ON" = true ] && echo 'configured' || echo 'off - normal logon screen')"
 echo "   Right Display : $RIGHT_ON   Streaming: $STREAM_ON   Drive sync: $SYNC_ON"
 echo "   Home Assistant: $([ "$HA_ON" = true ] && echo "$HA_URL" || echo 'off')   Novastar: $([ "$NV_ON" = true ] && echo "$NV_HOST" || echo 'off')"
-echo "   Portal        : $PORTAL_URL"
-[ -n "$CV_URL" ] && echo "   Phones        : $CV_URL (QR overlay + /view page)"
+echo ""
+echo "  🎉 You are all set! Here is how to start your first session:"
+echo ""
+echo "   1. RESTART this PC (or click 'Restart Illumina Backend'"
+echo "      on the desktop). This starts the engine in the background."
+echo ""
+echo "   2. Click the 'Illumina Portal' shortcut on the desktop."
+echo "      The control panel will open, and your displays will wake up!"
+echo ""
+echo "  From now on, the backend starts automatically every time the PC"
+echo "  boots. You only ever need to click the 'Illumina Portal' icon."
 echo ""
 if [ "$AUTO_LOGIN_ON" = true ]; then
-    echo "   Auto sign-in takes effect the next time this PC restarts - for example"
-    echo "   after a power cut or your next planned reboot. There is nothing you need"
-    echo "   to do right now: the desktop icon 'Illumina' starts everything immediately"
-    echo "   in this session, and from the next restart onward the PC will boot"
-    echo "   straight into Illumina on its own."
-    read -p "   Would you like to restart now to see auto sign-in in action? [y/N] (ENTER = No): " ANS
+    read -p "  Would you like to restart now to finish setup? [y/N] (ENTER = No): " ANS
     if [[ "$ANS" =~ ^[yY]$ ]]; then reboot; fi
-else
-    echo "   No restart is needed - everything is live already. The desktop icon"
-    echo "   'Illumina' starts the app and opens the portal any time, and the"
-    echo "   'Restart Illumina' icon is the one-click recovery if a display ever"
-    echo "   misbehaves."
 fi
