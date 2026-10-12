@@ -608,7 +608,7 @@ Write-Host ""
 Write-Host "   1. RESTART this PC (or double-click 'Restart Illumina Backend'" -ForegroundColor White
 Write-Host "      on the desktop). This starts the engine in the background." -ForegroundColor White
 Write-Host ""
-Write-Host "   2. Double-click the 'Illumina Portal' shortcut on the desktop." -ForegroundColor White
+Write-Host "   2. Double-click the 'Restart Illumina Backend' shortcut on the desktop." -ForegroundColor White
 Write-Host "      The control panel will open, and your displays will wake up!" -ForegroundColor White
 Write-Host ""
 Write-Host "  From now on, the backend starts automatically every time the PC" -ForegroundColor Cyan
