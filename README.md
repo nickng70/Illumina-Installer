@@ -16,7 +16,7 @@ Before running the installer, plan your physical deployment and network topology
 
 ### Display Outputs
 * **Left & Right Displays:** The congregation-facing main outputs. Illumina is device-agnostic — LED video walls, laser projectors, and large-format LCD panels are all first-class citizens.
-* **CG Overlay:** A dedicated lower-third/chyron output, always prepared as part of the core display set; typically routed into a broadcast switcher or OBS via capture card.
+* **CG Overlay:** A dedicated lower-third/chyron output, typically routed into a broadcast switcher or OBS via capture card. Optional — prepared only when you enable Streaming/Broadcast during setup.
 * **Confidence Monitors:** Smaller windowed previews positioned near the operator or pulpit for lyrics, slides, and stream health.
 * **Aux Hall Display:** An overflow-room program player with independent audio routing for cry rooms, foyers, or secondary halls (active when a broadcast setup is enabled).
 
@@ -62,6 +62,7 @@ The installer will guide you through a brief, self-explanatory setup process:
 * **Environment Profile:** Choose between creating a dedicated, locked-down kiosk account (`avauser`) or utilizing the current Windows account (ideal for IT testing or personal laptops).
 * **Hardware & Integration Survey:** Five quick questions — Right Display, Streaming/Broadcast, Google Drive sync, Home Assistant device automation, and Novastar controller — calibrate the software to your physical setup. ENTER accepts the safe default (No) for each.
 * **Auto Sign-In:** Choose whether the PC should boot directly into Illumina without requiring a password.
+* *Security note: Auto Sign-In stores the account password in the machine registry (Windows) or display-manager config (Ubuntu), readable by administrators. This is the standard trade-off for a kiosk PC — fine for a dedicated AVA machine, but IT should be aware.*
 
 ### Step 4: Activation & Reboot
 Once the script completes, Illumina is fully installed and **live immediately**. You can launch it right away using the new desktop shortcut. 
@@ -108,6 +109,7 @@ Illumina is designed around a simple, stress-free rule: **the displays follow th
 * **Self-heal:** If a display window crashes or is accidentally closed while an operator is present, the watchdog relaunches it within seconds. A dark wall fixes itself before anyone panics.
 * **Remote-safe:** Portals opened from remote laptops or pulpit tablets never wake or sleep the walls — only the AVA PC's own portal controls the room. Two pulpit tablets (speaker + interpreter) can annotate and control concurrently.
 * **Refresh-proof:** Browser refreshes and reconnects never lose operator input or live playback state.
+* **Self-configuring displays:** On its very first launch, Illumina detects the monitors physically attached to the AVA PC and assigns each display role automatically (portal + confidence monitors on the operator screen, walls/CG/Aux Hall on the rest). If a screen lands on the wrong output, adjust it once in **Menu → Settings → Displays** — saved settings govern from then on.
 
 ---
 
@@ -132,7 +134,13 @@ If the portal browser window is accidentally closed, or the system requires a re
 
 Illumina utilizes an **idempotent deployment model**. When your IT team releases a new version, you do not need to uninstall anything.
 
-Simply re-run the **exact same installation command** (from Step 2 above) for your operating system. The installer is intelligent: it will automatically back up and preserve your local media libraries, download the newest compiled binaries, and seamlessly apply the update in place.
+Simply re-run the **exact same installation command** (from Step 2 above) for your operating system. The installer is intelligent: it downloads the newest compiled binaries and applies the update in place while preserving everything that belongs to your church:
+
+* **All machine settings and secrets** (display geometry, integration keys, operator preferences)
+* **Your media library, slide decks, and recordings** (`MediaContent`, `SlideContent`, `Recordings`)
+* **Any customized operator UI language strings**
+
+The application itself and the built-in **Bible and hymn corpus are refreshed** with every update, so content corrections reach every church automatically.
 
 ---
 

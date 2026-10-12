@@ -1,5 +1,5 @@
 <#
-    Illumina AVA PC Uninstaller - Windows 10/11 (v8.0 FINAL)
+    Illumina AVA PC Uninstaller - Windows 10/11 (v8.1)
     Safely removes Illumina, its shortcuts, firewall rules, and local HTTPS certificate.
     Preserves the 'avauser' account and optionally preserves machine settings.
 #>

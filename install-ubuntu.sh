@@ -1,21 +1,32 @@
 #!/bin/bash
 # ==============================================================================
-# Illumina AVA PC Installer - Ubuntu 22.04/24.04 LTS (v8.0 FINAL)
+# Illumina AVA PC Installer - Ubuntu 22.04/24.04 LTS (v8.1)
 # - Friendly sudo check; nothing changes before it passes
-# - Provisions media engines via apt: LibreOffice, FFmpeg, wmctrl, zenity, 
-#   and Google Chrome (official .deb) if missing
+# - Provisions media engines via apt: LibreOffice, FFmpeg, wmctrl, zenity,
+#   libnss3-tools (Chrome's certificate store), and Google Chrome
+#   (official .deb) if missing
 # - Five-question survey (Right Display / Streaming / Drive sync / device
 #   automation / Novastar brightness); ENTER = No everywhere
 # - Device automation: detect Home Assistant first, then address, then offer
 #   a real Docker install here (Ubuntu is officially supported territory)
-# - Patches the INSTALLED appsettings.json with the PFX Kestrel block when
-#   the release zip predates it - PARSE-FREE awk text insert
+# - Stamps the PFX Kestrel HTTPS block into the per-machine overrides layer
+#   (AppData/AppSettingsOverrides.json) via jq - the factory
+#   appsettings.json is never touched
+# - Imports the machine certificate into Chrome's NSS database as well as
+#   the system CA store (Chrome ignores the system store on Linux)
+# - Updates preserve machine state: AppData (settings + secrets),
+#   MediaContent, SlideContent, Recordings and any customized
+#   Data/Localization strings survive a re-install; the app and the
+#   Bible/hymn corpus refresh from the new build
 # - Grants the AVA PC account read access to the GitHub token for in-app updates
-# - Binding contract per AGENTS.md: HTTPS localhost-only + HTTP on all
-#   interfaces; congregation QR BaseUrl auto-stamped from the LAN address
+# - Binding contract per AGENTS.md: HTTPS localhost-only (no inbound 443
+#   firewall rule) + HTTP on all interfaces; congregation QR BaseUrl
+#   auto-stamped from the physical LAN adapter (virtual/VPN excluded)
 # - Resolved dependency paths + integration settings stamped into the
 #   per-machine overrides layer (merge, never clobber)
 # - Clean [1]/[2] AVA PC account menu; GDM3 auto sign-in; ufw; sleep masked
+# - Backend autostart is installed for EVERY setup (auto sign-in only
+#   controls the login screen, not whether the app starts)
 # - Simplified, bulletproof desktop shortcuts (Native Chrome portal +
 #   Backend manager with friendly zenity UI prompts)
 # - Human-facing labels use "Display" and "Sabbath"; internal config keys
@@ -46,11 +57,10 @@ fi
 USER_HOME=$(eval echo "~$INTERACTIVE_USER")
 INSTALL_DIR="/opt/illumina"
 MACHINE_DIR="/var/lib/illumina"
-HTTP_PORT="443"
 PORTAL_URL="https://localhost"
 
 echo "=================================================="
-echo "   Illumina AVA PC Installer - Ubuntu (v8.0)      "
+echo "   Illumina AVA PC Installer - Ubuntu (v8.1)      "
 echo "   Guided setup for a safe, self-starting AVA PC  "
 echo "=================================================="
 echo ""
@@ -65,8 +75,8 @@ echo "        navigate to Menu->Settings."
 echo -e "\n==> [1/9] Accessing GitHub Illumina repository..."
 apt-get update -qq > /dev/null
 # Added zenity for the native Linux pop-up message box
-apt-get install -y -qq curl unzip jq openssl wmctrl zenity > /dev/null
-echo "  Core tools (curl, unzip, jq, openssl, wmctrl, zenity) are ready."
+apt-get install -y -qq curl unzip jq openssl wmctrl zenity libnss3-tools > /dev/null
+echo "  Core tools (curl, unzip, jq, openssl, wmctrl, zenity, libnss3-tools) are ready."
 
 # ----------------------------- [2/9] GITHUB TOKEN ---------------------------
 mkdir -p "$MACHINE_DIR"
@@ -197,11 +207,39 @@ fi
 
 # ----------------------------- [7/9] APP FILES & PERMISSIONS ----------------
 echo -e "\n==> [6/9] Installing Illumina and preparing its content folders..."
-if [ -d "$INSTALL_DIR/Data" ]; then mv "$INSTALL_DIR/Data" /tmp/illumina-data-backup; fi
+
+# Move the machine's state aside before wiping, restore it after the new
+# build lands. AppData holds every machine setting + secret (overrides,
+# operator form, kiosk geometry); MediaContent/SlideContent/Recordings are
+# the church's own libraries; Data/Localization keeps any customized UI
+# strings. Everything else under Data (the Bible/hymn corpus) deliberately
+# REFRESHES from the new build so content fixes reach every church.
+PRESERVE=$(mktemp -d)
+for ITEM in AppData MediaContent SlideContent Recordings; do
+    if [ -d "$INSTALL_DIR/$ITEM" ]; then mv "$INSTALL_DIR/$ITEM" "$PRESERVE/$ITEM"; fi
+done
+if [ -d "$INSTALL_DIR/Data/Localization" ]; then
+    mkdir -p "$PRESERVE/Data"
+    mv "$INSTALL_DIR/Data/Localization" "$PRESERVE/Data/Localization"
+fi
 rm -rf "$INSTALL_DIR"; mkdir -p "$INSTALL_DIR"
 unzip -q "$ZIP_FILE" -d "$INSTALL_DIR"; rm -f "$ZIP_FILE"
-if [ -d "/tmp/illumina-data-backup" ]; then rm -rf "$INSTALL_DIR/Data"; mv /tmp/illumina-data-backup "$INSTALL_DIR/Data"; fi
+# A zip built on Windows carries no Unix exec bits - restore them.
+chmod +x "$INSTALL_DIR/Illumina" 2>/dev/null || true
+for ITEM in AppData MediaContent SlideContent Recordings; do
+    if [ -d "$PRESERVE/$ITEM" ]; then
+        rm -rf "$INSTALL_DIR/$ITEM"
+        mv "$PRESERVE/$ITEM" "$INSTALL_DIR/$ITEM"
+    fi
+done
+if [ -d "$PRESERVE/Data/Localization" ]; then
+    rm -rf "$INSTALL_DIR/Data/Localization"
+    mkdir -p "$INSTALL_DIR/Data"
+    mv "$PRESERVE/Data/Localization" "$INSTALL_DIR/Data/Localization"
+fi
+rm -rf "$PRESERVE"
 mkdir -p "$INSTALL_DIR/Data"
+echo "  Machine state preserved (settings, media, slides, recordings, custom UI strings); app and Bible/hymn corpus refreshed."
 
 for W_DIR in SlideContent MediaContent AppData Recordings; do
     mkdir -p "$INSTALL_DIR/$W_DIR"
@@ -219,9 +257,9 @@ echo ""
 echo "  Every church is wired differently, so we ask five quick questions."
 echo "  ENTER accepts the safe default (No) for each, and everything here can"
 echo "  be changed later in Menu->Settings."
-echo "  Note: the CG overlay output is always prepared as part of the core"
-echo "  display set (like the Left Display); question 2 controls the broadcast"
-echo "  encoder, stream monitors and Aux Hall."
+echo "  Note: question 2 controls the CG overlay output, broadcast encoder,"
+echo "  stream monitors and Aux Hall - answer No only if this PC will never"
+echo "  stream or feed an overflow room."
 read -p "  [1/5] Do you have a RIGHT Display (in addition to the Left Display)? [y/N] (ENTER = No): " R_WALL
 read -p "  [2/5] Enable STREAMING display (for streaming and Aux Hall displays)? [y/N] (ENTER = No): " STREAM
 read -p "  [3/5] Retrieve Prayer/Announcement slides from Google Drive? [y/N] (ENTER = No): " SYNC
@@ -295,37 +333,46 @@ fi
 
 echo ""
 echo "  Illumina serves its portal over HTTPS on this PC only. We create a private"
-echo "  100-year certificate, trust it system-wide, and hand Kestrel the PFX path."
+echo "  100-year certificate, trust it system-wide and in Chrome, and hand Kestrel"
+echo "  the PFX path via the machine's overrides layer."
 PFX_PATH="$MACHINE_DIR/illumina.pfx"; PFX_PASS="IlluminaKioskCert"
 openssl req -x509 -newkey rsa:4096 -keyout /tmp/illumina.key -out /tmp/illumina.crt -days 36500 -nodes -subj "/CN=localhost" > /dev/null 2>&1
 openssl pkcs12 -export -out "$PFX_PATH" -inkey /tmp/illumina.key -in /tmp/illumina.crt -passout pass:"$PFX_PASS" > /dev/null 2>&1
 cp /tmp/illumina.crt /usr/local/share/ca-certificates/illumina.crt
 update-ca-certificates > /dev/null 2>&1
-rm -f /tmp/illumina.key /tmp/illumina.crt
 chown "$HUMAN_USER:$HUMAN_USER" "$PFX_PATH"; chmod 400 "$PFX_PATH"
-echo "  Certificate created, trusted system-wide, and ready for Kestrel."
+# Chrome/Chromium ignore the system CA store on Linux - the certificate must
+# also live in each runtime user's NSS database or every kiosk window warns.
+import_nss_cert() {
+    local U="$1"
+    local U_HOME
+    U_HOME=$(eval echo "~$U")
+    [ -d "$U_HOME" ] || return 0
+    sudo -u "$U" mkdir -p "$U_HOME/.pki/nssdb"
+    if [ ! -f "$U_HOME/.pki/nssdb/cert9.db" ]; then
+        sudo -u "$U" certutil -d sql:"$U_HOME/.pki/nssdb" -N --empty-password > /dev/null 2>&1 || true
+    fi
+    sudo -u "$U" certutil -d sql:"$U_HOME/.pki/nssdb" -A -t "C,," -n Illumina -i /tmp/illumina.crt > /dev/null 2>&1 || true
+}
+import_nss_cert "$HUMAN_USER"
+[ "$INTERACTIVE_USER" != "$HUMAN_USER" ] && import_nss_cert "$INTERACTIVE_USER"
+rm -f /tmp/illumina.key /tmp/illumina.crt
+echo "  Certificate created, trusted system-wide and in Chrome, and ready for Kestrel."
 
-if [ -f "$INSTALL_DIR/appsettings.json" ] && ! grep -q '"Kestrel"' "$INSTALL_DIR/appsettings.json"; then
-    awk -v pfx="$PFX_PATH" -v pass="$PFX_PASS" '
-        NR==1 && $0 ~ /^[[:space:]]*\{/ {
-            print
-            print "  \"Kestrel\": {"
-            print "    \"Certificates\": {"
-            print "      \"Default\": {"
-            print "        \"Path\": \"" pfx "\","
-            print "        \"Password\": \"" pass "\""
-            print "      }"
-            print "    }"
-            print "  },"
-            next
-        }
-        { print }
-    ' "$INSTALL_DIR/appsettings.json" > "$INSTALL_DIR/appsettings.json.tmp" \
-        && mv "$INSTALL_DIR/appsettings.json.tmp" "$INSTALL_DIR/appsettings.json"
-    echo "  Patched appsettings.json with the HTTPS certificate path (text insert)."
+# Congregation phones need the PHYSICAL LAN address. Virtual adapters
+# (docker0 - this script itself may install Docker -, bridges, VPN tunnels,
+# veth) also hold private IPs and must never win; prefer the interface that
+# owns the default route, then any remaining private-range physical address.
+GW_IF=$(ip route show default 2>/dev/null | awk '{print $5; exit}')
+LAN_IP=""
+if [ -n "$GW_IF" ]; then
+    LAN_IP=$(ip -4 -o addr show dev "$GW_IF" scope global 2>/dev/null | awk '{split($4,a,"/"); print a[1]; exit}')
 fi
-
-LAN_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
+if [ -z "$LAN_IP" ]; then
+    LAN_IP=$(ip -4 -o addr show scope global 2>/dev/null \
+        | grep -Ev 'docker|br-|virbr|vboxnet|vmnet|tun|tap|veth|zt' \
+        | awk '$4 ~ /^(10\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.)/ { split($4,a,"/"); print a[1]; exit }')
+fi
 CV_URL=""; [ -n "$LAN_IP" ] && CV_URL="http://$LAN_IP"
 
 OVERRIDES="$INSTALL_DIR/AppData/AppSettingsOverrides.json"
@@ -338,8 +385,10 @@ jq \
   --arg cvurl "$CV_URL" \
   --arg key "$KEY_JSON" --arg prayer "$PRAYER_ID" --arg ann "$ANN_ID" \
   --arg soffice "/usr/bin/soffice" --arg ffmpeg "/usr/bin/ffmpeg" \
+  --arg pfx "$PFX_PATH" --arg pfxpass "$PFX_PASS" \
   '
     .Urls = "https://localhost;http://0.0.0.0:80"
+    | .Kestrel = { Certificates: { Default: { Path: $pfx, Password: $pfxpass } } }
     | .Kiosk = ((.Kiosk // {}) + { BaseUrl: "https://localhost", Enabled: true,
                                    RightWallEnabled: $right, CgEnabled: $stream, ProgramEnabled: $stream })
     | (if $stream then . else .Kiosk.CgConfidenceMonitorEnabled = false end)
@@ -408,19 +457,21 @@ create_desktop_file "$DESKTOP_DIR/illumina-portal.desktop" "Illumina Portal" "$C
 # 2. The Backend Restart Shortcut (Shows the friendly zenity pop-up)
 create_desktop_file "$DESKTOP_DIR/restart-illumina.desktop" "Restart Illumina Backend" "$INSTALL_DIR/start-backend.sh"
 
-# 3. The Auto-Start Shortcut (Runs silently on boot)
-if [ "$AUTO_LOGIN_ON" = true ]; then
-    create_desktop_file "$AUTOSTART_DIR/illumina-backend.desktop" "Illumina Backend" "$INSTALL_DIR/start-backend.sh --silent"
-fi
+# 3. The Auto-Start Shortcut (Runs silently on every login - auto SIGN-IN only
+# controls whether a password is needed, never whether the backend starts)
+create_desktop_file "$AUTOSTART_DIR/illumina-backend.desktop" "Illumina Backend" "$INSTALL_DIR/start-backend.sh --silent"
 echo "  Shortcuts placed for $HUMAN_USER - 'Illumina Portal' (everyday) and 'Restart Illumina Backend' (recovery)."
 
 echo -e "\n==> [9/9] Opening the network doors and keeping the PC awake..."
+# The portal binds HTTPS to localhost only, so no inbound 443 rule is needed
+# (delete any legacy one); port 80 serves congregation phones and tablets.
 if command -v ufw &> /dev/null; then
-    ufw allow 443/tcp > /dev/null; ufw allow 80/tcp > /dev/null
+    ufw delete allow 443/tcp > /dev/null 2>&1 || true
+    ufw allow 80/tcp > /dev/null
 fi
 systemctl mask sleep.target suspend.target hibernate.target hybrid-sleep.target > /dev/null 2>&1 || true
 sudo -u "$HUMAN_USER" gsettings set org.gnome.settings-daemon.plugins.power sleep-inactive-ac-type 'nothing' > /dev/null 2>&1 || true
-echo "  Firewall allows the portal (443) and congregation phones (80); sleep is disabled."
+echo "  Firewall allows congregation phones (port 80); the portal stays localhost-only. Sleep is disabled."
 
 echo ""
 echo "=================================================="

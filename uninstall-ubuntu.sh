@@ -1,7 +1,8 @@
 #!/bin/bash
 # ==============================================================================
-# Illumina AVA PC Uninstaller - Ubuntu 22.04/24.04 LTS (v8.0 FINAL)
-# Safely removes Illumina, its shortcuts, firewall rules, and local HTTPS cert.
+# Illumina AVA PC Uninstaller - Ubuntu 22.04/24.04 LTS (v8.1)
+# Safely removes Illumina, its shortcuts, firewall rules, and local HTTPS cert
+# (system CA store AND Chrome's per-user NSS database).
 # ==============================================================================
 set -e
 
@@ -48,10 +49,19 @@ if command -v ufw &> /dev/null; then
     ufw delete allow 80/tcp > /dev/null 2>&1 || true
 fi
 
-# 4. Remove Certificates
+# 4. Remove Certificates (system CA store + Chrome's per-user NSS database)
 echo -e "\n==> Removing HTTPS certificates..."
 rm -f /usr/local/share/ca-certificates/illumina.crt
 update-ca-certificates > /dev/null 2>&1 || true
+remove_nss_cert() {
+    local U="$1"
+    local U_HOME
+    U_HOME=$(eval echo "~$U" 2>/dev/null)
+    [ -f "$U_HOME/.pki/nssdb/cert9.db" ] || return 0
+    sudo -u "$U" certutil -d sql:"$U_HOME/.pki/nssdb" -D -n Illumina > /dev/null 2>&1 || true
+}
+remove_nss_cert "$INTERACTIVE_USER"
+[ "$INTERACTIVE_USER" != "avauser" ] && remove_nss_cert "avauser"
 
 # 5. Restore Normal Logon (Disable Auto-Login)
 echo -e "\n==> Restoring normal logon screen..."

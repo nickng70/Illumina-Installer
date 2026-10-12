@@ -1,5 +1,5 @@
 <#
-    Illumina AVA PC Installer - Windows 10/11 (v8.0 FINAL)
+    Illumina AVA PC Installer - Windows 10/11 (v8.1)
     - Friendly administrator check; nothing changes before it passes
     - Provisions media engines from the internet: LibreOffice (slides),
       FFmpeg (broadcast), and Chrome itself if missing (winget)
@@ -7,13 +7,20 @@
       device automation / Novastar brightness); ENTER = No everywhere
     - Home Assistant: detect first, then address; Windows gets honest
       guidance (HA is officially Linux/VM/appliance territory)
-    - Patches the INSTALLED appsettings.json with the machine-store Kestrel
-      block when the release zip predates it (parse-free text insert)
+    - Stamps the machine-store Kestrel HTTPS block into the per-machine
+      overrides layer (AppData/AppSettingsOverrides.json) - the factory
+      appsettings.json is never touched
+    - Updates preserve machine state: AppData (settings + secrets),
+      MediaContent, SlideContent, Recordings and any customized
+      Data/Localization strings survive a re-install; the app and the
+      Bible/hymn corpus refresh from the new build
     - Creates + trusts a private 100-year machine certificate and asserts
       the private-key ACL via the key FILE's ACL (works on Windows
       PowerShell 5.1, prevents ERR_CONNECTION_CLOSED)
-    - Binding contract per AGENTS.md: HTTPS localhost-only + HTTP on all
-      interfaces for congregation phones; QR BaseUrl auto-stamped
+    - Binding contract per AGENTS.md: HTTPS localhost-only (no inbound
+      firewall rule needed) + HTTP on all interfaces for congregation
+      phones; QR BaseUrl auto-stamped from the physical LAN adapter
+      (virtual/VPN adapters excluded)
     - Clean [1]/[2] AVA PC account menu; surgical process handling
     - Content folders permission-locked and hidden quietly
     - Simplified, bulletproof desktop shortcuts (Native Chrome portal +
@@ -29,7 +36,6 @@ $GitHubRepo  = "Illumina-Releases"
 $AssetName   = "illumina-win-x64.zip"
 $InstallDir  = "C:\Program Files\Illumina"
 $MachineDir  = "C:\ProgramData\Illumina"   # update-surviving machine store
-$HttpPort    = "443"
 $PortalUrl   = "https://localhost"
 $TokenFile   = "$MachineDir\github-token"
 $SofficePath = "C:\Program Files\LibreOffice\program\soffice.exe"
@@ -63,7 +69,7 @@ if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administra
 }
 
 Write-Host "==================================================" -ForegroundColor Cyan
-Write-Host "   Illumina AVA PC Installer - Windows (v8.0)     " -ForegroundColor Cyan
+Write-Host "   Illumina AVA PC Installer - Windows (v8.1)     " -ForegroundColor Cyan
 Write-Host "   Guided setup for a safe, self-starting AVA PC  " -ForegroundColor Cyan
 Write-Host "==================================================" -ForegroundColor Cyan
 Write-Host ""
@@ -257,41 +263,53 @@ else {
     }
 }
 
+# The app runs as $HumanUser and reads the GitHub token for in-app update
+# checks - grant that account read access (the token was locked to
+# SYSTEM/Administrators when it was stored, before the account was chosen).
+if (Test-Path $TokenFile) {
+    icacls $TokenFile /grant "${HumanUser}:R" | Out-Null
+    Log "Granted read access to the GitHub token for $HumanUser (in-app update checks)."
+}
+
 # ---------------- [6/9] App files + content folders -------------------------
 Log "[6/9] Installing Illumina and preparing its content folders..."
-$Backup = $null
-if (Test-Path "$InstallDir\Data") { $Backup = Join-Path $env:TEMP "illumina-data-backup"; Move-Item "$InstallDir\Data" $Backup -Force }
+
+# Move the machine's state aside before wiping, restore it after the new
+# build lands. AppData holds every machine setting + secret (overrides,
+# operator form, kiosk geometry); MediaContent/SlideContent/Recordings are
+# the church's own libraries; Data/Localization keeps any customized UI
+# strings. Everything else under Data (the Bible/hymn corpus) deliberately
+# REFRESHES from the new build so content fixes reach every church.
+$Preserve = Join-Path $env:TEMP ("illumina-preserve-" + [Guid]::NewGuid().ToString("N"))
+New-Item -ItemType Directory -Path $Preserve -Force | Out-Null
+foreach ($item in @("AppData", "MediaContent", "SlideContent", "Recordings")) {
+    $src = Join-Path $InstallDir $item
+    if (Test-Path $src) { Move-Item $src (Join-Path $Preserve $item) -Force }
+}
+if (Test-Path "$InstallDir\Data\Localization") {
+    New-Item -ItemType Directory -Path "$Preserve\Data" -Force | Out-Null
+    Move-Item "$InstallDir\Data\Localization" "$Preserve\Data\Localization" -Force
+}
 if (Test-Path $InstallDir) { Remove-Item $InstallDir -Recurse -Force }
 New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
 Expand-Archive -Path $Zip -DestinationPath $InstallDir -Force
 Remove-Item $Zip -Force
-if ($Backup) {
-    if (Test-Path "$InstallDir\Data") { Remove-Item "$InstallDir\Data" -Recurse -Force }
-    Move-Item $Backup "$InstallDir\Data" -Force
-}
-New-Item -ItemType Directory -Path "$InstallDir\Data" -Force | Out-Null
-
-$appSettingsPath = "$InstallDir\appsettings.json"
-$raw = Get-Content $appSettingsPath -Raw
-if ($raw -notmatch '"Kestrel"') {
-    $kestrelBlock = @"
-
-  "Kestrel": {
-    "Certificates": {
-      "Default": {
-        "Subject": "localhost",
-        "Store": "My",
-        "Location": "LocalMachine",
-        "AllowInvalid": true
-      }
+foreach ($item in @("AppData", "MediaContent", "SlideContent", "Recordings")) {
+    $saved = Join-Path $Preserve $item
+    if (Test-Path $saved) {
+        $dest = Join-Path $InstallDir $item
+        if (Test-Path $dest) { Remove-Item $dest -Recurse -Force }
+        Move-Item $saved $dest -Force
     }
-  },
-"@
-    $idx = $raw.IndexOf('{')
-    $raw = $raw.Insert($idx + 1, $kestrelBlock)
-    Set-Content -Path $appSettingsPath -Value $raw -Encoding UTF8
-    Log "Patched appsettings.json with the machine-store HTTPS certificate block (text insert, no JSON parsing)."
 }
+if (Test-Path "$Preserve\Data\Localization") {
+    if (Test-Path "$InstallDir\Data\Localization") { Remove-Item "$InstallDir\Data\Localization" -Recurse -Force }
+    New-Item -ItemType Directory -Path "$InstallDir\Data" -Force | Out-Null
+    Move-Item "$Preserve\Data\Localization" "$InstallDir\Data\Localization" -Force
+}
+Remove-Item $Preserve -Recurse -Force -ErrorAction SilentlyContinue
+New-Item -ItemType Directory -Path "$InstallDir\Data" -Force | Out-Null
+Log "Machine state preserved (settings, media, slides, recordings, custom UI strings); app and Bible/hymn corpus refreshed."
 
 foreach ($w in @("SlideContent", "MediaContent", "AppData", "Recordings")) {
     $p = Join-Path $InstallDir $w
@@ -309,9 +327,9 @@ Write-Host ""
 Write-Host "  Every church is wired differently, so we ask five quick questions."
 Write-Host "  ENTER accepts the safe default (No) for each, and everything here can"
 Write-Host "  be changed later in Menu->Settings."
-Write-Host "  Note: the CG overlay output is always prepared as part of the core"
-Write-Host "  display set (like the Left Display); question 2 controls the broadcast"
-Write-Host "  encoder, stream monitors and Aux Hall."
+Write-Host "  Note: question 2 controls the CG overlay output, broadcast encoder,"
+Write-Host "  stream monitors and Aux Hall - answer No only if this PC will never"
+Write-Host "  stream or feed an overflow room."
 $rightWall = Read-Host "  [1/5] Do you have a RIGHT Display (in addition to the Left Display)? [y/N] (ENTER = No)"
 $streaming = Read-Host "  [2/5] Enable STREAMING display (for streaming and Aux Hall displays)? [y/N] (ENTER = No)"
 $sync      = Read-Host "  [3/5] Retrieve Prayer/Announcement slides from Google Drive? [y/N] (ENTER = No)"
@@ -415,10 +433,19 @@ $overridesPath = "$InstallDir\AppData\AppSettingsOverrides.json"
 if (Test-Path $overridesPath) { $obj = Get-Content $overridesPath -Raw | ConvertFrom-Json }
 else { $obj = [PSCustomObject]@{} }
 
-if ($obj.PSObject.Properties.Name -contains "Kestrel") {
-    $obj.PSObject.Properties.Remove("Kestrel")
-    Log "Removed an outdated certificate override from a previous install."
+# The factory appsettings.json ships no Kestrel block (it must be OS-neutral),
+# so the HTTPS certificate wiring lives here in the machine's overrides layer.
+$kestrel = [PSCustomObject]@{
+    Certificates = [PSCustomObject]@{
+        Default = [PSCustomObject]@{
+            Subject      = "localhost"
+            Store        = "My"
+            Location     = "LocalMachine"
+            AllowInvalid = $true
+        }
+    }
 }
+$obj | Add-Member -NotePropertyName "Kestrel" -Force -NotePropertyValue $kestrel
 $obj | Add-Member -NotePropertyName "Urls" -Force -NotePropertyValue "https://localhost;http://0.0.0.0:80"
 
 if ($obj.PSObject.Properties.Name -notcontains "Kiosk") { $obj | Add-Member -NotePropertyName "Kiosk" -NotePropertyValue ([PSCustomObject]@{}) }
@@ -461,9 +488,19 @@ $nv = $obj.Novastar
 $nv | Add-Member -NotePropertyName "Enabled" -NotePropertyValue $novastarOn -Force
 if ($novastarOn) { $nv | Add-Member -NotePropertyName "Host" -NotePropertyValue $novastarHost -Force }
 
-$lanIp = (Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
-          Where-Object { $_.IPAddress -ne '127.0.0.1' -and $_.IPAddress -notlike '169.254.*' } |
-          Select-Object -First 1).IPAddress
+# Congregation phones need the PHYSICAL LAN address. Virtual adapters
+# (Hyper-V/vEthernet, WSL, VPN tunnels, VMware/VirtualBox, Docker bridges)
+# also hold private IPs and must never win; prefer the interface that owns
+# the default gateway, then any remaining private-range physical address.
+$gwIfIndex = (Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue |
+              Sort-Object RouteMetric | Select-Object -First 1 -ExpandProperty InterfaceIndex)
+$lanCandidates = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+    Where-Object {
+        $_.InterfaceAlias -notmatch 'vEthernet|WSL|VPN|TAP|Tunnel|VirtualBox|VMware|Docker|Loopback|Bluetooth' -and
+        $_.IPAddress -match '^(10\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.)'
+    }
+$lanIp = ($lanCandidates | Where-Object { $_.InterfaceIndex -eq $gwIfIndex } | Select-Object -First 1).IPAddress
+if (-not $lanIp) { $lanIp = ($lanCandidates | Select-Object -First 1).IPAddress }
 if ($lanIp) {
     if ($obj.PSObject.Properties.Name -notcontains "CongregationView") { $obj | Add-Member -NotePropertyName "CongregationView" -NotePropertyValue ([PSCustomObject]@{}) }
     $obj.CongregationView | Add-Member -NotePropertyName "BaseUrl" -NotePropertyValue "http://$lanIp" -Force
@@ -471,7 +508,7 @@ if ($lanIp) {
 }
 
 Log "Dependency paths stamped: LibreOffice='$sofficeResolved' FFmpeg='$ffmpegResolved'"
-$obj | ConvertTo-Json -Depth 10 | Set-Content $overridesPath
+$obj | ConvertTo-Json -Depth 10 | Set-Content $overridesPath -Encoding UTF8
 
 # ---------------- [8/9] Helpers + shortcuts ---------------------------------
 Log "[8/9] Writing the everyday shortcuts..."
@@ -547,13 +584,15 @@ Log "Shortcuts placed for $HumanUser - 'Illumina Portal' (everyday) and 'Restart
 
 # ---------------- [9/9] Network, power, summary -----------------------------
 Log "[9/9] Opening the network doors and keeping the PC awake..."
+# The portal binds HTTPS to localhost only, so no inbound 443 rule is needed
+# (the legacy rule is still removed below in case an older installer made one).
+# Port 80 serves congregation phones and pulpit tablets over the LAN.
 Remove-NetFirewallRule -DisplayName "Illumina Web App"      -ErrorAction SilentlyContinue
 Remove-NetFirewallRule -DisplayName "Illumina Phones HTTP" -ErrorAction SilentlyContinue
-New-NetFirewallRule -DisplayName "Illumina Web App"      -Direction Inbound -LocalPort $HttpPort -Protocol TCP -Action Allow | Out-Null
-New-NetFirewallRule -DisplayName "Illumina Phones HTTP" -Direction Inbound -LocalPort 80      -Protocol TCP -Action Allow | Out-Null
+New-NetFirewallRule -DisplayName "Illumina Phones HTTP" -Direction Inbound -LocalPort 80 -Protocol TCP -Action Allow | Out-Null
 powercfg /change standby-timeout-ac 0 | Out-Null
 powercfg /change monitor-timeout-ac 0 | Out-Null
-Log "Firewall allows the portal (443) and congregation phones (80); sleep is disabled."
+Log "Firewall allows congregation phones (port 80); the portal stays localhost-only. Sleep is disabled."
 
 Write-Host ""
 Write-Host "==================================================" -ForegroundColor Cyan
