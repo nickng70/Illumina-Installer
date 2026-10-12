@@ -1,5 +1,5 @@
 <#
-    Illumina AVA PC Uninstaller - Windows 10/11 (v8.1)
+    Illumina AVA PC Uninstaller - Windows 10/11 (v1.0)
     Safely removes Illumina, its shortcuts, firewall rules, and local HTTPS certificate.
     Preserves the 'avauser' account and optionally preserves machine settings.
 #>
@@ -54,8 +54,9 @@ foreach ($spot in $spots) {
     }
 }
 
-# 3. Remove Firewall Rules
+# 3. Remove Firewall Rules (current program rule + legacy port rules)
 Write-Host "==> Removing firewall rules..." -ForegroundColor Green
+Remove-NetFirewallRule -DisplayName "Illumina App" -ErrorAction SilentlyContinue
 Remove-NetFirewallRule -DisplayName "Illumina Web App" -ErrorAction SilentlyContinue
 Remove-NetFirewallRule -DisplayName "Illumina Phones HTTP" -ErrorAction SilentlyContinue
 

@@ -1,6 +1,6 @@
 #!/bin/bash
 # ==============================================================================
-# Illumina AVA PC Installer - Ubuntu 22.04/24.04 LTS (v8.1)
+# Illumina AVA PC Installer - Ubuntu 22.04/24.04 LTS (v1.0)
 # - Friendly sudo check; nothing changes before it passes
 # - Provisions media engines via apt: LibreOffice, FFmpeg, wmctrl, zenity,
 #   libnss3-tools (Chrome's certificate store), and Google Chrome
@@ -19,9 +19,11 @@
 #   Data/Localization strings survive a re-install; the app and the
 #   Bible/hymn corpus refresh from the new build
 # - Grants the AVA PC account read access to the GitHub token for in-app updates
-# - Binding contract per AGENTS.md: HTTPS localhost-only (no inbound 443
-#   firewall rule) + HTTP on all interfaces; congregation QR BaseUrl
-#   auto-stamped from the physical LAN adapter (virtual/VPN excluded)
+# - Binding contract per AGENTS.md: HTTPS localhost-only + HTTP on all
+#   interfaces. The congregation QR address is AUTO-DETECTED by the app at
+#   runtime (physical LAN NIC, gateway preferred) - no IP is stamped here
+#   anymore, so a DHCP reassignment never breaks the QR code; Settings can
+#   pin it
 # - Resolved dependency paths + integration settings stamped into the
 #   per-machine overrides layer (merge, never clobber)
 # - Clean [1]/[2] AVA PC account menu; GDM3 auto sign-in; ufw; sleep masked
@@ -60,16 +62,18 @@ MACHINE_DIR="/var/lib/illumina"
 PORTAL_URL="https://localhost"
 
 echo "=================================================="
-echo "   Illumina AVA PC Installer - Ubuntu (v8.1)      "
+echo "   Illumina AVA PC Installer - Ubuntu (v1.0)      "
 echo "   Guided setup for a safe, self-starting AVA PC  "
 echo "=================================================="
 echo ""
-echo "  Welcome! This installer prepares this PC to run Illumina."
-echo "  1. Fetches the latest release and the media engines it needs,"
-echo "  2. Configures secure local HTTPS with local SSL certificate and"
-echo "  3. Integrations with your hardware."
-echo "  Note: To change or customize advanced options,"
-echo "        navigate to Menu->Settings."
+echo "  Welcome! In the next few minutes this PC will become your"
+echo "  church's presentation hub - displays, hymns, streaming and all."
+echo "  Here is what we will do together:"
+echo "   1. Fetch the latest Illumina release and its media engines,"
+echo "   2. Set up secure local HTTPS with a private certificate, and"
+echo "   3. Match the software to your hardware with five quick questions."
+echo "  Sit back - most of it is automatic, and everything can be"
+echo "  adjusted later in Menu->Settings."
 
 # ----------------------------- [1/9] DEPENDENCIES ---------------------------
 echo -e "\n==> [1/9] Accessing GitHub Illumina repository..."
@@ -359,21 +363,11 @@ import_nss_cert "$HUMAN_USER"
 rm -f /tmp/illumina.key /tmp/illumina.crt
 echo "  Certificate created, trusted system-wide and in Chrome, and ready for Kestrel."
 
-# Congregation phones need the PHYSICAL LAN address. Virtual adapters
-# (docker0 - this script itself may install Docker -, bridges, VPN tunnels,
-# veth) also hold private IPs and must never win; prefer the interface that
-# owns the default route, then any remaining private-range physical address.
-GW_IF=$(ip route show default 2>/dev/null | awk '{print $5; exit}')
-LAN_IP=""
-if [ -n "$GW_IF" ]; then
-    LAN_IP=$(ip -4 -o addr show dev "$GW_IF" scope global 2>/dev/null | awk '{split($4,a,"/"); print a[1]; exit}')
-fi
-if [ -z "$LAN_IP" ]; then
-    LAN_IP=$(ip -4 -o addr show scope global 2>/dev/null \
-        | grep -Ev 'docker|br-|virbr|vboxnet|vmnet|tun|tap|veth|zt' \
-        | awk '$4 ~ /^(10\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.)/ { split($4,a,"/"); print a[1]; exit }')
-fi
-CV_URL=""; [ -n "$LAN_IP" ] && CV_URL="http://$LAN_IP"
+# No CongregationView:BaseUrl stamping here anymore: the app auto-detects the
+# physical LAN address at runtime (CongregationViewUrlService), so a DHCP
+# reassignment can never strand the congregation QR on a stale IP. Settings ->
+# Application Paths remains the pin-down override for dual-LAN machines.
+# (Detection code removed - virtual adapters like docker0 can never win now.)
 
 OVERRIDES="$INSTALL_DIR/AppData/AppSettingsOverrides.json"
 mkdir -p "$INSTALL_DIR/AppData"
@@ -382,7 +376,6 @@ jq \
   --argjson right "$RIGHT_ON" --argjson stream "$STREAM_ON" --argjson sync "$SYNC_ON" \
   --argjson haon "$HA_ON" --arg haurl "$HA_URL" \
   --argjson nvon "$NV_ON" --arg nvhost "$NV_HOST" \
-  --arg cvurl "$CV_URL" \
   --arg key "$KEY_JSON" --arg prayer "$PRAYER_ID" --arg ann "$ANN_ID" \
   --arg soffice "/usr/bin/soffice" --arg ffmpeg "/usr/bin/ffmpeg" \
   --arg pfx "$PFX_PATH" --arg pfxpass "$PFX_PASS" \
@@ -402,11 +395,9 @@ jq \
     | .Broadcast = ((.Broadcast // {}) + { FFmpegPath: $ffmpeg })
     | .HomeAssistant = ((.HomeAssistant // {}) + { Enabled: $haon } + (if $haurl != "" then { BaseUrl: $haurl } else {} end))
     | .Novastar = ((.Novastar // {}) + { Enabled: $nvon } + (if $nvon then { Host: $nvhost } else {} end))
-    | .CongregationView = ((.CongregationView // {}) + (if $cvurl != "" then { BaseUrl: $cvurl } else {} end))
   ' "$OVERRIDES" > "$OVERRIDES.tmp" && mv "$OVERRIDES.tmp" "$OVERRIDES"
 chown "$HUMAN_USER:$HUMAN_USER" "$OVERRIDES"
 echo "  Dependency paths stamped: LibreOffice='/usr/bin/soffice' FFmpeg='/usr/bin/ffmpeg'"
-[ -n "$CV_URL" ] && echo "  Congregation phones will reach this PC at $CV_URL (QR overlay + /view page)."
 
 # ----------------------------- [9/9] HELPERS, SHORTCUTS, NETWORK ------------
 echo -e "\n==> [8/9] Writing the everyday shortcuts..."
@@ -487,7 +478,7 @@ echo ""
 echo "   1. RESTART this PC (or click 'Restart Illumina Backend'"
 echo "      on the desktop). This starts the engine in the background."
 echo ""
-echo "   2. Click the 'Restart Illumina Backend' shortcut on the desktop."
+echo "   2. Click the 'Illumina Portal' shortcut on the desktop."
 echo "      The control panel will open, and your displays will wake up!"
 echo ""
 echo "  From now on, the backend starts automatically every time the PC"

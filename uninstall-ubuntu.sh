@@ -1,6 +1,6 @@
 #!/bin/bash
 # ==============================================================================
-# Illumina AVA PC Uninstaller - Ubuntu 22.04/24.04 LTS (v8.1)
+# Illumina AVA PC Uninstaller - Ubuntu 22.04/24.04 LTS (v1.0)
 # Safely removes Illumina, its shortcuts, firewall rules, and local HTTPS cert
 # (system CA store AND Chrome's per-user NSS database).
 # ==============================================================================

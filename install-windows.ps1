@@ -1,5 +1,5 @@
 <#
-    Illumina AVA PC Installer - Windows 10/11 (v8.1)
+    Illumina AVA PC Installer - Windows 10/11 (v1.0)
     - Friendly administrator check; nothing changes before it passes
     - Provisions media engines from the internet: LibreOffice (slides),
       FFmpeg (broadcast), and Chrome itself if missing (winget)
@@ -17,10 +17,12 @@
     - Creates + trusts a private 100-year machine certificate and asserts
       the private-key ACL via the key FILE's ACL (works on Windows
       PowerShell 5.1, prevents ERR_CONNECTION_CLOSED)
-    - Binding contract per AGENTS.md: HTTPS localhost-only (no inbound
-      firewall rule needed) + HTTP on all interfaces for congregation
-      phones; QR BaseUrl auto-stamped from the physical LAN adapter
-      (virtual/VPN adapters excluded)
+    - Binding contract per AGENTS.md: HTTPS localhost-only + HTTP on all
+      interfaces for congregation phones; one PROGRAM firewall rule for
+      Illumina.exe covers every port the app binds. The congregation QR
+      address is AUTO-DETECTED by the app at runtime (physical LAN NIC,
+      gateway preferred) - no IP is stamped here anymore, so a DHCP
+      reassignment never breaks the QR code; Settings can pin it
     - Clean [1]/[2] AVA PC account menu; surgical process handling
     - Content folders permission-locked and hidden quietly
     - Simplified, bulletproof desktop shortcuts (Native Chrome portal +
@@ -69,16 +71,18 @@ if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administra
 }
 
 Write-Host "==================================================" -ForegroundColor Cyan
-Write-Host "   Illumina AVA PC Installer - Windows (v8.1)     " -ForegroundColor Cyan
+Write-Host "   Illumina AVA PC Installer - Windows (v1.0)     " -ForegroundColor Cyan
 Write-Host "   Guided setup for a safe, self-starting AVA PC  " -ForegroundColor Cyan
 Write-Host "==================================================" -ForegroundColor Cyan
 Write-Host ""
-Write-Host "  Welcome! This installer prepares this PC to run Illumina."
-Write-Host "  1. Fetches the latest release and the media engines it needs,"
-Write-Host "  2. Configures secure local HTTPS with local SSL certificate and"
-Write-Host "  3. Integrations with your hardware."
-Write-Host "  Note: To change or customize advanced options,"
-Write-Host "        navigate to Menu->Settings."
+Write-Host "  Welcome! In the next few minutes this PC will become your" -ForegroundColor White
+Write-Host "  church's presentation hub - displays, hymns, streaming and all." -ForegroundColor White
+Write-Host "  Here is what we will do together:" -ForegroundColor White
+Write-Host "   1. Fetch the latest Illumina release and its media engines," -ForegroundColor White
+Write-Host "   2. Set up secure local HTTPS with a private certificate, and" -ForegroundColor White
+Write-Host "   3. Match the software to your hardware with five quick questions." -ForegroundColor White
+Write-Host "  Sit back - most of it is automatic, and everything can be" -ForegroundColor White
+Write-Host "  adjusted later in Menu->Settings." -ForegroundColor White
 
 # ---------------- [1/9] GitHub token ----------------------------------------
 Log "[1/9] Accessing GitHub Illumina repository..."
@@ -488,24 +492,10 @@ $nv = $obj.Novastar
 $nv | Add-Member -NotePropertyName "Enabled" -NotePropertyValue $novastarOn -Force
 if ($novastarOn) { $nv | Add-Member -NotePropertyName "Host" -NotePropertyValue $novastarHost -Force }
 
-# Congregation phones need the PHYSICAL LAN address. Virtual adapters
-# (Hyper-V/vEthernet, WSL, VPN tunnels, VMware/VirtualBox, Docker bridges)
-# also hold private IPs and must never win; prefer the interface that owns
-# the default gateway, then any remaining private-range physical address.
-$gwIfIndex = (Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue |
-              Sort-Object RouteMetric | Select-Object -First 1 -ExpandProperty InterfaceIndex)
-$lanCandidates = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
-    Where-Object {
-        $_.InterfaceAlias -notmatch 'vEthernet|WSL|VPN|TAP|Tunnel|VirtualBox|VMware|Docker|Loopback|Bluetooth' -and
-        $_.IPAddress -match '^(10\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.)'
-    }
-$lanIp = ($lanCandidates | Where-Object { $_.InterfaceIndex -eq $gwIfIndex } | Select-Object -First 1).IPAddress
-if (-not $lanIp) { $lanIp = ($lanCandidates | Select-Object -First 1).IPAddress }
-if ($lanIp) {
-    if ($obj.PSObject.Properties.Name -notcontains "CongregationView") { $obj | Add-Member -NotePropertyName "CongregationView" -NotePropertyValue ([PSCustomObject]@{}) }
-    $obj.CongregationView | Add-Member -NotePropertyName "BaseUrl" -NotePropertyValue "http://$lanIp" -Force
-    Log "Congregation phones will reach this PC at http://$lanIp (QR overlay + /view page)."
-}
+# No CongregationView:BaseUrl stamping here anymore: the app auto-detects the
+# physical LAN address at runtime (CongregationViewUrlService), so a DHCP
+# reassignment can never strand the congregation QR on a stale IP. Settings ->
+# Application Paths remains the pin-down override for dual-LAN machines.
 
 Log "Dependency paths stamped: LibreOffice='$sofficeResolved' FFmpeg='$ffmpegResolved'"
 $obj | ConvertTo-Json -Depth 10 | Set-Content $overridesPath -Encoding UTF8
@@ -584,15 +574,17 @@ Log "Shortcuts placed for $HumanUser - 'Illumina Portal' (everyday) and 'Restart
 
 # ---------------- [9/9] Network, power, summary -----------------------------
 Log "[9/9] Opening the network doors and keeping the PC awake..."
-# The portal binds HTTPS to localhost only, so no inbound 443 rule is needed
-# (the legacy rule is still removed below in case an older installer made one).
-# Port 80 serves congregation phones and pulpit tablets over the LAN.
+# One PROGRAM rule covers every port Illumina.exe binds: HTTP on the LAN for
+# congregation phones + pulpit tablets, and the localhost-only HTTPS portal.
+# A program rule can never go stale if ports change later. (The portal's HTTPS
+# binding stays localhost-only by design - see AGENTS.md's binding contract.)
 Remove-NetFirewallRule -DisplayName "Illumina Web App"      -ErrorAction SilentlyContinue
 Remove-NetFirewallRule -DisplayName "Illumina Phones HTTP" -ErrorAction SilentlyContinue
-New-NetFirewallRule -DisplayName "Illumina Phones HTTP" -Direction Inbound -LocalPort 80 -Protocol TCP -Action Allow | Out-Null
+Remove-NetFirewallRule -DisplayName "Illumina App"         -ErrorAction SilentlyContinue
+New-NetFirewallRule -DisplayName "Illumina App" -Direction Inbound -Program $AppExe -Protocol TCP -Action Allow | Out-Null
 powercfg /change standby-timeout-ac 0 | Out-Null
 powercfg /change monitor-timeout-ac 0 | Out-Null
-Log "Firewall allows congregation phones (port 80); the portal stays localhost-only. Sleep is disabled."
+Log "Firewall welcomes Illumina (congregation phones and tablets can reach this PC); sleep is disabled."
 
 Write-Host ""
 Write-Host "==================================================" -ForegroundColor Cyan
@@ -608,7 +600,7 @@ Write-Host ""
 Write-Host "   1. RESTART this PC (or double-click 'Restart Illumina Backend'" -ForegroundColor White
 Write-Host "      on the desktop). This starts the engine in the background." -ForegroundColor White
 Write-Host ""
-Write-Host "   2. Double-click the 'Restart Illumina Backend' shortcut on the desktop." -ForegroundColor White
+Write-Host "   2. Double-click the 'Illumina Portal' shortcut on the desktop." -ForegroundColor White
 Write-Host "      The control panel will open, and your displays will wake up!" -ForegroundColor White
 Write-Host ""
 Write-Host "  From now on, the backend starts automatically every time the PC" -ForegroundColor Cyan
