@@ -3,10 +3,12 @@
     - Friendly administrator check; nothing changes before it passes
     - Provisions media engines from the internet: LibreOffice (slides),
       FFmpeg (broadcast), and Chrome itself if missing (winget)
-    - Five-question survey (Right Display / Streaming / Drive sync /
-      device automation / Novastar brightness); ENTER = No everywhere
-    - Home Assistant: detect first, then address; Windows gets honest
-      guidance (HA is officially Linux/VM/appliance territory)
+    - Quick survey (Right Display / Drive sync / primary + secondary display
+      language); ENTER takes the suggestion. Streaming/CG, smart-plug
+      automation and Novastar brightness are NOT asked here - they are
+      usually not set up yet on install day, and the factory defaults
+      already cover them. Rotating "Did you know?" tips during the
+      downloads point the user at Menu->Settings for those
     - Stamps the machine-store Kestrel HTTPS block into the per-machine
       overrides layer (AppData/AppSettingsOverrides.json) - the factory
       appsettings.json is never touched
@@ -46,6 +48,45 @@ $FfmpegPath  = "C:\ffmpeg\ffmpeg.exe"
 
 function Log($m) { Write-Host "`n==> $m" -ForegroundColor Green }
 
+# Rotating "Did you know?" tips, shown before each long download/install so
+# the wait doubles as a tour of what Menu->Settings can do later.
+$script:TipIndex = 0
+$Tips = @(
+    @("Members can follow the service on their phones - the Congregation QR",
+      "overlay appears on the wall displays at your cue. Nothing to set up:",
+      "it always uses this PC's live network address."),
+    @("Ready to stream or record? Settings -> Displays wakes up the CG",
+      "overlay and the Broadcast Encoder whenever you are - no reinstall."),
+    @("Settings -> Device Setup can power LED walls on and off on a schedule",
+      "with Tapo smart plugs (via Home Assistant) - the rack switches itself",
+      "off after the service."),
+    @("Have a Novastar video controller? Settings -> Device Setup adds",
+      "day/evening brightness schedules and cabinet health monitoring -",
+      "no more climbing into the rack."),
+    @("Illumina speaks five languages - English, Chinese (Simplified and",
+      "Traditional), Indonesian and Malay - each with its own hymn corpus",
+      "and display fonts. See Settings -> Appearance."),
+    @("Hymns can display top-and-bottom or side-by-side, per screen, and the",
+      "Edit Hymns page proofreads every layout while you type."),
+    @("A pulpit tablet becomes the speaker's console at /tablet - slide",
+      "advance, laser pointer and ink annotations included."),
+    @("PTZ cameras can be driven from the portal with named presets tied to",
+      "broadcast scenes - one tap frames the shot."),
+    @("Menu -> Check for Updates brings new features and fresh hymn/Bible",
+      "content to this PC with one tap - library updates need no restart."),
+    @("Capture devices (cameras, switchers) can join any broadcast scene -",
+      "add them in Settings whenever your hardware arrives.")
+)
+function Show-Tip {
+    $t = $Tips[$script:TipIndex % $Tips.Count]; $script:TipIndex++
+    Write-Host ""
+    Write-Host "  --------------------------------------------" -ForegroundColor DarkCyan
+    Write-Host "  DID YOU KNOW?" -ForegroundColor Cyan
+    foreach ($line in $t) { Write-Host "  $line" -ForegroundColor Gray }
+    Write-Host "  --------------------------------------------" -ForegroundColor DarkCyan
+    Write-Host ""
+}
+
 function Resolve-Chrome {
     foreach ($c in @("C:\Program Files\Google\Chrome\Application\chrome.exe",
                      "C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
@@ -80,9 +121,10 @@ Write-Host "  church's presentation hub - displays, hymns, streaming and all." -
 Write-Host "  Here is what we will do together:" -ForegroundColor White
 Write-Host "   1. Fetch the latest Illumina release and its media engines," -ForegroundColor White
 Write-Host "   2. Set up secure local HTTPS with a private certificate, and" -ForegroundColor White
-Write-Host "   3. Match the software to your hardware with five quick questions." -ForegroundColor White
-Write-Host "  Sit back - most of it is automatic, and everything can be" -ForegroundColor White
-Write-Host "  adjusted later in Menu->Settings." -ForegroundColor White
+Write-Host "   3. Match the software to your church with a few quick questions." -ForegroundColor White
+Write-Host "  Sit back - most of it is automatic, everything can be adjusted" -ForegroundColor White
+Write-Host "  later in Menu->Settings, and we will share a few tips while" -ForegroundColor White
+Write-Host "  the downloads run." -ForegroundColor White
 
 # ---------------- [1/9] GitHub token ----------------------------------------
 Log "[1/9] Accessing GitHub Illumina repository..."
@@ -102,6 +144,7 @@ $Api = @{ Authorization = "Bearer $Token"; Accept = "application/vnd.github+json
 
 # ---------------- [2/9] Latest release asset --------------------------------
 Log "[2/9] Downloading the latest Illumina release..."
+Show-Tip
 try { $Release = Invoke-RestMethod -Uri "https://api.github.com/repos/$GitHubOwner/$GitHubRepo/releases/latest" -Headers $Api }
 catch { throw "Could not reach the release repository. Check the token and internet connection. $_" }
 $Asset = $Release.assets | Where-Object { $_.name -eq $AssetName } | Select-Object -First 1
@@ -119,6 +162,7 @@ Write-Host "  display). Anything missing will be installed now."
 if (Test-Path $SofficePath) { Log "LibreOffice already present." }
 else {
     Log "Installing LibreOffice..."
+    Show-Tip
     if (Get-Command winget -ErrorAction SilentlyContinue) {
         winget install --id TheDocumentFoundation.LibreOffice -e --accept-source-agreements --accept-package-agreements --silent | Out-Null
         if (Test-Path $SofficePath) { Log "LibreOffice installed." } else { Write-Warning "  LibreOffice install could not be verified - install it manually if slides must convert." }
@@ -128,6 +172,7 @@ else {
 if (Test-Path $FfmpegPath) { Log "FFmpeg already present." }
 else {
     Log "Installing FFmpeg..."
+    Show-Tip
     $ffmpegZip = "$env:TEMP\ffmpeg-release.zip"; $ffmpegOut = "$env:TEMP\ffmpeg-extract"
     try {
         New-Item -ItemType Directory -Path "C:\ffmpeg" -Force | Out-Null
@@ -142,6 +187,7 @@ else {
 $ChromeExe = Resolve-Chrome
 if (-not $ChromeExe) {
     Log "Chrome not found - installing it..."
+    Show-Tip
     if (Get-Command winget -ErrorAction SilentlyContinue) {
         winget install --id Google.Chrome -e --accept-source-agreements --accept-package-agreements --silent | Out-Null
         $ChromeExe = Resolve-Chrome
@@ -277,6 +323,7 @@ if (Test-Path $TokenFile) {
 
 # ---------------- [6/9] App files + content folders -------------------------
 Log "[6/9] Installing Illumina and preparing its content folders..."
+Show-Tip
 
 # Move the machine's state aside before wiping, restore it after the new
 # build lands. AppData holds every machine setting + secret (overrides,
@@ -328,26 +375,53 @@ Set-Content "$MachineDir\current-version" $Release.tag_name
 # ---------------- [7/9] Survey + certificate + machine config ---------------
 Log "[7/9] Site survey, HTTPS certificate, and machine settings..."
 Write-Host ""
-Write-Host "  Every church is wired differently, so we ask five quick questions."
-Write-Host "  ENTER accepts the safe default (No) for each, and everything here can"
-Write-Host "  be changed later in Menu->Settings."
-Write-Host "  Note: question 2 controls the CG overlay output, broadcast encoder,"
-Write-Host "  stream monitors and Aux Hall - answer No only if this PC will never"
-Write-Host "  stream or feed an overflow room."
-$rightWall = Read-Host "  [1/5] Do you have a RIGHT Display (in addition to the Left Display)? [y/N] (ENTER = No)"
-$streaming = Read-Host "  [2/5] Enable STREAMING display (for streaming and Aux Hall displays)? [y/N] (ENTER = No)"
-$sync      = Read-Host "  [3/5] Retrieve Prayer/Announcement slides from Google Drive? [y/N] (ENTER = No)"
-Write-Host ""
-Write-Host "  Illumina can also talk to the smart hardware many churches already own."
-Write-Host "  Both integrations are optional and can be switched on later in Settings."
-Write-Host "  Device control runs through Home Assistant; LED brightness schedules and"
-Write-Host "  cabinet health through the Novastar controller."
-$haUse       = Read-Host "  [4/5] Automatically control devices (e.g. Tapo smart plugs to power off/on LED walls)? [y/N] (ENTER = No)"
-$novastarUse = Read-Host "  [5/5] Automatically control brightness on Novastar Video Controller? [y/N] (ENTER = No)"
+Write-Host "  Every church is wired differently, so we ask a few quick questions."
+Write-Host "  ENTER accepts the suggested default for each, and everything here can"
+Write-Host "  be changed later in Menu->Settings. Streaming, smart plugs and LED"
+Write-Host "  brightness are not asked here - they are usually not wired up yet on"
+Write-Host "  install day, and Settings switches them on whenever you are ready."
+$rightWall = Read-Host "  [1/4] Do you have a RIGHT Display (in addition to the Left Display)? [y/N] (ENTER = No)"
+$sync      = Read-Host "  [2/4] Retrieve Prayer/Announcement slides from Google Drive? [y/N] (ENTER = No)"
 $rightWallOn = ($rightWall -match '^[yY]')
-$streamOn    = ($streaming -match '^[yY]')
 $syncOn      = ($sync -match '^[yY]')
-Log "Survey recorded - Right Display: $rightWallOn | Streaming: $streamOn | Drive sync: $syncOn"
+
+# Display languages. On a re-install the machine's existing choices become
+# the defaults (ENTER keeps them); fresh installs default to English primary
+# + Simplified Chinese secondary. Values are the app's LanguageCode enum
+# names - they land in AppSettingsOverrides.json's Localization section.
+$LangCodes = @("", "English", "ChineseSimplified", "ChineseTraditional", "Indonesian", "Malay")
+$LangNames = @("", "English", "Simplified Chinese", "Traditional Chinese", "Bahasa Indonesia", "Bahasa Melayu")
+$overridesPath = "$InstallDir\AppData\AppSettingsOverrides.json"
+$existingLoc = $null
+if (Test-Path $overridesPath) { try { $existingLoc = (Get-Content $overridesPath -Raw | ConvertFrom-Json).Localization } catch { } }
+$primaryDefault = 1; $secondaryDefault = 2
+if ($existingLoc -and $existingLoc.PrimaryLanguage) {
+    $idx = [Array]::IndexOf($LangCodes, [string]$existingLoc.PrimaryLanguage)
+    if ($idx -gt 0) { $primaryDefault = $idx }
+}
+if ($existingLoc -and $existingLoc.SelectedSecondaryLanguage) {
+    $idx = [Array]::IndexOf($LangCodes, [string]$existingLoc.SelectedSecondaryLanguage)
+    if ($idx -gt 0) { $secondaryDefault = $idx }
+}
+
+function Read-Language([string]$role, [int]$default) {
+    Write-Host ""
+    Write-Host "  [$role] Choose the $role display language:"
+    Write-Host "        [1] English   [2] Simplified Chinese   [3] Traditional Chinese"
+    Write-Host "        [4] Bahasa Indonesia   [5] Bahasa Melayu"
+    $sel = Read-Host "  Press ENTER for $default ($($LangNames[$default]))"
+    if ($sel -notmatch '^[1-5]$') { $sel = "$default" }
+    return [int]$sel
+}
+$primaryIdx = Read-Language "3/4 - PRIMARY" $primaryDefault
+$secondaryIdx = Read-Language "4/4 - SECONDARY" $secondaryDefault
+while ($secondaryIdx -eq $primaryIdx) {
+    Write-Host "  Secondary cannot be the same as primary ($($LangNames[$primaryIdx])) - please pick a different one." -ForegroundColor Yellow
+    $secondaryIdx = Read-Language "4/4 - SECONDARY" $secondaryDefault
+}
+$primaryLang   = $LangCodes[$primaryIdx]
+$secondaryLang = $LangCodes[$secondaryIdx]
+Log "Survey recorded - Right Display: $rightWallOn | Drive sync: $syncOn | Languages: $($LangNames[$primaryIdx]) + $($LangNames[$secondaryIdx])"
 
 $keyJson  = "$MachineDir\key.json"
 $prayerId = ""; $annId = ""
@@ -373,32 +447,6 @@ if ($syncOn) {
             Log "A folder ID was left empty, so Drive sync stays OFF on this machine."
         }
     } else { $syncOn = $false; Log "No Drive key available, so Drive sync stays OFF on this machine." }
-}
-
-$haOn = $false; $haUrl = ""
-if ($haUse -match '^[yY]') {
-    try {
-        Invoke-WebRequest -Uri "http://localhost:8123" -UseBasicParsing -TimeoutSec 3 | Out-Null
-        $haUrl = "http://localhost:8123"; $haOn = $true
-        Log "Home Assistant detected on this PC."
-    } catch { }
-    if (-not $haUrl) {
-        $haUrl = Read-Host "  Home Assistant address on your network (e.g. http://192.168.1.50:8123), or ENTER if not set up yet"
-        if ($haUrl) { $haOn = $true; Log "Home Assistant will be reached at $haUrl" }
-    }
-    if (-not $haUrl) {
-        Write-Host "  Home Assistant is officially supported on Linux, VMs and dedicated hardware"
-        Write-Host "  (a Raspberry Pi is the church favourite). On this Windows PC we recommend one"
-        Write-Host "  of those; Illumina only needs its web address, which you can add any time in"
-        Write-Host "  Settings > Device Setup."
-    }
-}
-
-$novastarOn = $false; $novastarHost = ""
-if ($novastarUse -match '^[yY]') {
-    $novastarHost = Read-Host "  Novastar controller IP address (e.g. 172.16.0.11)"
-    if ($novastarHost) { $novastarOn = $true; Log "Novastar will target $novastarHost - pair the auth token later in Settings > Device Setup." }
-    else { Log "No controller address given - Novastar integration left OFF." }
 }
 
 Write-Host ""
@@ -433,9 +481,15 @@ try {
     Write-Warning "  Could not adjust the certificate key ACL: $_"
 }
 
-$overridesPath = "$InstallDir\AppData\AppSettingsOverrides.json"
 if (Test-Path $overridesPath) { $obj = Get-Content $overridesPath -Raw | ConvertFrom-Json }
 else { $obj = [PSCustomObject]@{} }
+
+# Display languages chosen in the survey (Localization:PrimaryLanguage /
+# SelectedSecondaryLanguage - the app's new-shape keys).
+if ($obj.PSObject.Properties.Name -notcontains "Localization") { $obj | Add-Member -NotePropertyName "Localization" -NotePropertyValue ([PSCustomObject]@{}) }
+$loc = $obj.Localization
+$loc | Add-Member -NotePropertyName "PrimaryLanguage"           -NotePropertyValue $primaryLang   -Force
+$loc | Add-Member -NotePropertyName "SelectedSecondaryLanguage" -NotePropertyValue $secondaryLang -Force
 
 # The factory appsettings.json ships no Kestrel block (it must be OS-neutral),
 # so the HTTPS certificate wiring lives here in the machine's overrides layer.
@@ -457,9 +511,10 @@ $k = $obj.Kiosk
 $k | Add-Member -NotePropertyName "BaseUrl"          -NotePropertyValue $PortalUrl   -Force
 $k | Add-Member -NotePropertyName "Enabled"          -NotePropertyValue $true         -Force
 $k | Add-Member -NotePropertyName "RightWallEnabled" -NotePropertyValue $rightWallOn -Force
-$k | Add-Member -NotePropertyName "CgEnabled"        -NotePropertyValue $streamOn     -Force
-$k | Add-Member -NotePropertyName "ProgramEnabled"   -NotePropertyValue $streamOn     -Force
-if (-not $streamOn) { $k | Add-Member -NotePropertyName "CgConfidenceMonitorEnabled" -NotePropertyValue $false -Force }
+# CgEnabled/ProgramEnabled/CgConfidenceMonitorEnabled are deliberately NOT
+# stamped: the compiled-in defaults (CG + encoder on, CG monitor off) cover
+# install day, Settings -> Displays owns them thereafter, and a re-install
+# must never clobber what the church later chose.
 
 $sofficeResolved = if (Test-Path $SofficePath) { $SofficePath } else { "" }
 $ffmpegResolved  = if (Test-Path $FfmpegPath)  { $FfmpegPath }  else { "" }
@@ -482,15 +537,8 @@ if ($syncOn) {
 if ($obj.PSObject.Properties.Name -notcontains "Broadcast") { $obj | Add-Member -NotePropertyName "Broadcast" -NotePropertyValue ([PSCustomObject]@{}) }
 $obj.Broadcast | Add-Member -NotePropertyName "FFmpegPath" -NotePropertyValue $ffmpegResolved -Force
 
-if ($obj.PSObject.Properties.Name -notcontains "HomeAssistant") { $obj | Add-Member -NotePropertyName "HomeAssistant" -NotePropertyValue ([PSCustomObject]@{}) }
-$ha = $obj.HomeAssistant
-$ha | Add-Member -NotePropertyName "Enabled" -NotePropertyValue $haOn -Force
-if ($haUrl) { $ha | Add-Member -NotePropertyName "BaseUrl" -NotePropertyValue $haUrl -Force }
-
-if ($obj.PSObject.Properties.Name -notcontains "Novastar") { $obj | Add-Member -NotePropertyName "Novastar" -NotePropertyValue ([PSCustomObject]@{}) }
-$nv = $obj.Novastar
-$nv | Add-Member -NotePropertyName "Enabled" -NotePropertyValue $novastarOn -Force
-if ($novastarOn) { $nv | Add-Member -NotePropertyName "Host" -NotePropertyValue $novastarHost -Force }
+# HomeAssistant/Novastar are likewise left to Settings -> Device Setup:
+# untouched here so existing machine choices survive a re-install.
 
 # No CongregationView:BaseUrl stamping here anymore: the app auto-detects the
 # physical LAN address at runtime (CongregationViewUrlService), so a DHCP
@@ -592,8 +640,14 @@ Write-Host "   Setup complete - Illumina $($Release.tag_name) is ready!" -Foregr
 Write-Host "==================================================" -ForegroundColor Cyan
 Write-Host "   AVA PC Account: $HumanUser$(if ($useAvaUser) { ' (dedicated standard account)' } else { ' (this PC''s existing account)' })"
 Write-Host "   Auto sign-in  : $(if ($autoLoginOn) { 'configured' } else { 'off - normal logon screen' })"
-Write-Host "   Right Display : $rightWallOn   Streaming: $streamOn   Drive sync: $syncOn"
-Write-Host "   Home Assistant: $(if ($haOn) { $haUrl } else { 'off' })   Novastar: $(if ($novastarOn) { $novastarHost } else { 'off' })"
+Write-Host "   Right Display : $rightWallOn   Drive sync: $syncOn"
+Write-Host "   Languages     : $($LangNames[$primaryIdx]) (primary) + $($LangNames[$secondaryIdx]) (secondary)"
+Write-Host ""
+Write-Host "  When you are ready for more, Menu->Settings grows with you:" -ForegroundColor Cyan
+Write-Host "   - Displays       : CG overlay, Broadcast Encoder, confidence monitors" -ForegroundColor Gray
+Write-Host "   - Device Setup   : Tapo smart plugs (power schedules), Novastar brightness" -ForegroundColor Gray
+Write-Host "   - Appearance     : languages, hymn layouts, display fonts, themes" -ForegroundColor Gray
+Write-Host "   - Check for Updates : one-tap software and hymn/Bible library updates" -ForegroundColor Gray
 Write-Host ""
 Write-Host "  Congratulations! You are all set! Here is how to start your first session:" -ForegroundColor Yellow
 Write-Host ""

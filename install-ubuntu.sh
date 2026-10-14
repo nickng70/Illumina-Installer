@@ -5,10 +5,12 @@
 # - Provisions media engines via apt: LibreOffice, FFmpeg, wmctrl, zenity,
 #   libnss3-tools (Chrome's certificate store), and Google Chrome
 #   (official .deb) if missing
-# - Five-question survey (Right Display / Streaming / Drive sync / device
-#   automation / Novastar brightness); ENTER = No everywhere
-# - Device automation: detect Home Assistant first, then address, then offer
-#   a real Docker install here (Ubuntu is officially supported territory)
+# - Quick survey (Right Display / Drive sync / primary + secondary display
+#   language); ENTER takes the suggestion. Streaming/CG, smart-plug
+#   automation and Novastar brightness are NOT asked here - they are
+#   usually not set up yet on install day, and the factory defaults
+#   already cover them. Rotating "Did you know?" tips during the
+#   downloads point the user at Menu->Settings for those
 # - Stamps the PFX Kestrel HTTPS block into the per-machine overrides layer
 #   (AppData/AppSettingsOverrides.json) via jq - the factory
 #   appsettings.json is never touched
@@ -61,6 +63,32 @@ INSTALL_DIR="/opt/illumina"
 MACHINE_DIR="/var/lib/illumina"
 PORTAL_URL="https://localhost"
 
+# Rotating "Did you know?" tips, shown before each long download/install so
+# the wait doubles as a tour of what Menu->Settings can do later.
+TIP_INDEX=0
+TIPS=(
+"Members can follow the service on their phones - the Congregation QR overlay appears on the wall displays at your cue. Nothing to set up: it always uses this PC's live network address."
+"Ready to stream or record? Settings -> Displays wakes up the CG overlay and the Broadcast Encoder whenever you are - no reinstall."
+"Settings -> Device Setup can power LED walls on and off on a schedule with Tapo smart plugs (via Home Assistant) - the rack switches itself off after the service."
+"Have a Novastar video controller? Settings -> Device Setup adds day/evening brightness schedules and cabinet health monitoring - no more climbing into the rack."
+"Illumina speaks five languages - English, Chinese (Simplified and Traditional), Indonesian and Malay - each with its own hymn corpus and display fonts. See Settings -> Appearance."
+"Hymns can display top-and-bottom or side-by-side, per screen, and the Edit Hymns page proofreads every layout while you type."
+"A pulpit tablet becomes the speaker's console at /tablet - slide advance, laser pointer and ink annotations included."
+"PTZ cameras can be driven from the portal with named presets tied to broadcast scenes - one tap frames the shot."
+"Menu -> Check for Updates brings new features and fresh hymn/Bible content to this PC with one tap - library updates need no restart."
+"Capture devices (cameras, switchers) can join any broadcast scene - add them in Settings whenever your hardware arrives."
+)
+show_tip() {
+    local T="${TIPS[$((TIP_INDEX % ${#TIPS[@]}))]}"
+    TIP_INDEX=$((TIP_INDEX + 1))
+    echo ""
+    echo "  --------------------------------------------"
+    echo "  DID YOU KNOW?"
+    echo "  $T" | fold -s -w 66 | sed 's/^/  /'
+    echo "  --------------------------------------------"
+    echo ""
+}
+
 echo "=================================================="
 echo "   Illumina AVA PC Installer - Ubuntu (v1.0)      "
 echo "   Guided setup for a safe, self-starting AVA PC  "
@@ -71,9 +99,10 @@ echo "  church's presentation hub - displays, hymns, streaming and all."
 echo "  Here is what we will do together:"
 echo "   1. Fetch the latest Illumina release and its media engines,"
 echo "   2. Set up secure local HTTPS with a private certificate, and"
-echo "   3. Match the software to your hardware with five quick questions."
-echo "  Sit back - most of it is automatic, and everything can be"
-echo "  adjusted later in Menu->Settings."
+echo "   3. Match the software to your church with a few quick questions."
+echo "  Sit back - most of it is automatic, everything can be adjusted"
+echo "  later in Menu->Settings, and we will share a few tips while"
+echo "  the downloads run."
 
 # ----------------------------- [1/9] DEPENDENCIES ---------------------------
 echo -e "\n==> [1/9] Accessing GitHub Illumina repository..."
@@ -100,6 +129,7 @@ fi
 
 # ----------------------------- [3/9] DOWNLOAD RELEASE -----------------------
 echo -e "\n==> [2/9] Downloading the latest Illumina release..."
+show_tip
 RELEASE_JSON=$(curl -s -H "Authorization: Bearer $TOKEN" -H "Accept: application/vnd.github+json" \
     "https://api.github.com/repos/nickng70/Illumina-Releases/releases/latest")
 TAG_NAME=$(echo "$RELEASE_JSON" | jq -r '.tag_name')
@@ -116,6 +146,7 @@ echo -e "\n==> [3/9] Provisioning media engines and the display browser..."
 echo "  Illumina relies on three companions: LibreOffice (converts slide"
 echo "  decks), FFmpeg (remuxes the broadcast feed), and Chrome (renders every"
 echo "  display). Anything missing will be installed now."
+show_tip
 apt-get install -y -qq libreoffice ffmpeg > /dev/null
 echo "  LibreOffice and FFmpeg are ready."
 
@@ -128,6 +159,7 @@ resolve_chrome() {
 CHROME_BIN=$(resolve_chrome || true)
 if [ -z "$CHROME_BIN" ]; then
     echo "  Chrome not found - installing Google Chrome..."
+    show_tip
     curl -sSL -o /tmp/chrome.deb https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
     apt-get install -y -qq /tmp/chrome.deb > /dev/null || true
     rm -f /tmp/chrome.deb
@@ -211,6 +243,7 @@ fi
 
 # ----------------------------- [7/9] APP FILES & PERMISSIONS ----------------
 echo -e "\n==> [6/9] Installing Illumina and preparing its content folders..."
+show_tip
 
 # Move the machine's state aside before wiping, restore it after the new
 # build lands. AppData holds every machine setting + secret (overrides,
@@ -258,25 +291,50 @@ echo "$TAG_NAME" > "$MACHINE_DIR/current-version"
 # ----------------------------- [8/9] SURVEY, CERT, OVERRIDES ----------------
 echo -e "\n==> [7/9] Site survey, HTTPS certificate, and machine settings..."
 echo ""
-echo "  Every church is wired differently, so we ask five quick questions."
-echo "  ENTER accepts the safe default (No) for each, and everything here can"
-echo "  be changed later in Menu->Settings."
-echo "  Note: question 2 controls the CG overlay output, broadcast encoder,"
-echo "  stream monitors and Aux Hall - answer No only if this PC will never"
-echo "  stream or feed an overflow room."
-read -p "  [1/5] Do you have a RIGHT Display (in addition to the Left Display)? [y/N] (ENTER = No): " R_WALL
-read -p "  [2/5] Enable STREAMING display (for streaming and Aux Hall displays)? [y/N] (ENTER = No): " STREAM
-read -p "  [3/5] Retrieve Prayer/Announcement slides from Google Drive? [y/N] (ENTER = No): " SYNC
-echo ""
-echo "  Illumina can also talk to the smart hardware many churches already own."
-echo "  Both integrations are optional and can be switched on later in Settings."
-echo "  Device control runs through Home Assistant; LED brightness schedules and"
-echo "  cabinet health through the Novastar controller."
-read -p "  [4/5] Automatically control devices (e.g. Tapo smart plugs to power off/on LED walls)? [y/N] (ENTER = No): " HA_USE
-read -p "  [5/5] Automatically control brightness on Novastar Video Controller? [y/N] (ENTER = No): " NV_USE
+echo "  Every church is wired differently, so we ask a few quick questions."
+echo "  ENTER accepts the suggested default for each, and everything here can"
+echo "  be changed later in Menu->Settings. Streaming, smart plugs and LED"
+echo "  brightness are not asked here - they are usually not wired up yet on"
+echo "  install day, and Settings switches them on whenever you are ready."
+read -p "  [1/4] Do you have a RIGHT Display (in addition to the Left Display)? [y/N] (ENTER = No): " R_WALL
+read -p "  [2/4] Retrieve Prayer/Announcement slides from Google Drive? [y/N] (ENTER = No): " SYNC
 RIGHT_ON=false;  [[ "$R_WALL" =~ ^[yY]$ ]] && RIGHT_ON=true
-STREAM_ON=false; [[ "$STREAM" =~ ^[yY]$ ]] && STREAM_ON=true
 SYNC_ON=false;   [[ "$SYNC"   =~ ^[yY]$ ]] && SYNC_ON=true
+
+# Display languages. On a re-install the machine's existing choices become
+# the defaults (ENTER keeps them); fresh installs default to English primary
+# + Simplified Chinese secondary. Values are the app's LanguageCode enum
+# names - they land in AppSettingsOverrides.json's Localization section.
+LANG_CODES=("" "English" "ChineseSimplified" "ChineseTraditional" "Indonesian" "Malay")
+LANG_NAMES=("" "English" "Simplified Chinese" "Traditional Chinese" "Bahasa Indonesia" "Bahasa Melayu")
+OVERRIDES="$INSTALL_DIR/AppData/AppSettingsOverrides.json"
+PRIMARY_DEFAULT=1; SECONDARY_DEFAULT=2
+if [ -f "$OVERRIDES" ]; then
+    CUR_P=$(jq -r '.Localization.PrimaryLanguage // empty' "$OVERRIDES" 2>/dev/null || true)
+    CUR_S=$(jq -r '.Localization.SelectedSecondaryLanguage // empty' "$OVERRIDES" 2>/dev/null || true)
+    for i in 1 2 3 4 5; do
+        [ "$CUR_P" = "${LANG_CODES[$i]}" ] && PRIMARY_DEFAULT=$i
+        [ "$CUR_S" = "${LANG_CODES[$i]}" ] && SECONDARY_DEFAULT=$i
+    done
+fi
+read_language() {
+    local LABEL=$1 DEFAULT=$2 SEL
+    echo ""
+    echo "  $LABEL"
+    echo "        [1] English   [2] Simplified Chinese   [3] Traditional Chinese"
+    echo "        [4] Bahasa Indonesia   [5] Bahasa Melayu"
+    read -p "  Press ENTER for $DEFAULT (${LANG_NAMES[$DEFAULT]}): " SEL
+    [[ "$SEL" =~ ^[1-5]$ ]] || SEL=$DEFAULT
+    LANG_PICK=$SEL
+}
+read_language "[3/4] Choose the PRIMARY display language:" "$PRIMARY_DEFAULT"; PRIMARY_IDX=$LANG_PICK
+while true; do
+    read_language "[4/4] Choose the SECONDARY display language:" "$SECONDARY_DEFAULT"; SECONDARY_IDX=$LANG_PICK
+    [ "$SECONDARY_IDX" != "$PRIMARY_IDX" ] && break
+    echo "  Secondary cannot be the same as primary (${LANG_NAMES[$PRIMARY_IDX]}) - please pick a different one."
+done
+PRIMARY_LANG=${LANG_CODES[$PRIMARY_IDX]}; SECONDARY_LANG=${LANG_CODES[$SECONDARY_IDX]}
+echo "  Languages: ${LANG_NAMES[$PRIMARY_IDX]} (primary) + ${LANG_NAMES[$SECONDARY_IDX]} (secondary)"
 
 KEY_JSON="$MACHINE_DIR/key.json"; PRAYER_ID=""; ANN_ID=""
 if [ "$SYNC_ON" = true ]; then
@@ -295,45 +353,9 @@ if [ "$SYNC_ON" = true ]; then
     fi
 fi
 
-HA_ON=false; HA_URL=""
-if [[ "$HA_USE" =~ ^[yY]$ ]]; then
-    if curl -s -o /dev/null --max-time 3 http://localhost:8123; then
-        HA_URL="http://localhost:8123"; HA_ON=true
-        echo "  Home Assistant detected on this PC."
-    fi
-    if [ -z "$HA_URL" ]; then
-        read -p "  Home Assistant address on your network (e.g. http://192.168.1.50:8123), or ENTER if not set up yet: " HA_URL
-        if [ -n "$HA_URL" ]; then HA_ON=true; echo "  Home Assistant will be reached at $HA_URL"; fi
-    fi
-    if [ -z "$HA_URL" ]; then
-        read -p "  Install Home Assistant now on this PC (Docker container, host networking)? [Y/n] (ENTER = Yes): " HA_INSTALL
-        if [[ ! "$HA_INSTALL" =~ ^[nN] ]]; then
-            if ! command -v docker > /dev/null 2>&1; then
-                echo "  Installing Docker..."
-                apt-get install -y -qq docker.io > /dev/null
-                systemctl enable --now docker > /dev/null 2>&1 || true
-            fi
-            mkdir -p /var/lib/homeassistant
-            if ! docker ps -a --format '{{.Names}}' 2>/dev/null | grep -q '^homeassistant$'; then
-                docker run -d --name homeassistant --restart=unless-stopped --network=host \
-                    -v /var/lib/homeassistant:/config ghcr.io/home-assistant/home-assistant:stable > /dev/null
-            fi
-            HA_URL="http://localhost:8123"; HA_ON=true
-            echo "  Home Assistant installed - its dashboard appears at http://localhost:8123 once first boot finishes (1-2 minutes)."
-        else
-            echo "  Home Assistant is officially supported on Linux, VMs and dedicated hardware"
-            echo "  (a Raspberry Pi is the church favourite). Illumina only needs its web"
-            echo "  address, which you can add any time in Settings > Device Setup."
-        fi
-    fi
-fi
-
-NV_ON=false; NV_HOST=""
-if [[ "$NV_USE" =~ ^[yY]$ ]]; then
-    read -p "  Novastar controller IP address (e.g. 172.16.0.11): " NV_HOST
-    if [ -n "$NV_HOST" ]; then NV_ON=true; echo "  Novastar will target $NV_HOST - pair the auth token later in Settings > Device Setup."; fi
-    if [ -z "$NV_HOST" ]; then echo "  No controller address given - Novastar integration left OFF."; fi
-fi
+# Home Assistant / Novastar are deliberately not asked here: they are usually
+# not wired up yet on install day. Settings -> Device Setup enables them later,
+# and a re-install must never clobber what the church chose there.
 
 echo ""
 echo "  Illumina serves its portal over HTTPS on this PC only. We create a private"
@@ -369,13 +391,11 @@ echo "  Certificate created, trusted system-wide and in Chrome, and ready for Ke
 # Application Paths remains the pin-down override for dual-LAN machines.
 # (Detection code removed - virtual adapters like docker0 can never win now.)
 
-OVERRIDES="$INSTALL_DIR/AppData/AppSettingsOverrides.json"
 mkdir -p "$INSTALL_DIR/AppData"
 [ -f "$OVERRIDES" ] || echo '{}' > "$OVERRIDES"
 jq \
-  --argjson right "$RIGHT_ON" --argjson stream "$STREAM_ON" --argjson sync "$SYNC_ON" \
-  --argjson haon "$HA_ON" --arg haurl "$HA_URL" \
-  --argjson nvon "$NV_ON" --arg nvhost "$NV_HOST" \
+  --argjson right "$RIGHT_ON" --argjson sync "$SYNC_ON" \
+  --arg plang "$PRIMARY_LANG" --arg slang "$SECONDARY_LANG" \
   --arg key "$KEY_JSON" --arg prayer "$PRAYER_ID" --arg ann "$ANN_ID" \
   --arg soffice "/usr/bin/soffice" --arg ffmpeg "/usr/bin/ffmpeg" \
   --arg pfx "$PFX_PATH" --arg pfxpass "$PFX_PASS" \
@@ -383,8 +403,8 @@ jq \
     .Urls = "https://localhost;http://0.0.0.0:80"
     | .Kestrel = { Certificates: { Default: { Path: $pfx, Password: $pfxpass } } }
     | .Kiosk = ((.Kiosk // {}) + { BaseUrl: "https://localhost", Enabled: true,
-                                   RightWallEnabled: $right, CgEnabled: $stream, ProgramEnabled: $stream })
-    | (if $stream then . else .Kiosk.CgConfidenceMonitorEnabled = false end)
+                                   RightWallEnabled: $right })
+    | .Localization = ((.Localization // {}) + { PrimaryLanguage: $plang, SelectedSecondaryLanguage: $slang })
     | .SlideLibrary = ((.SlideLibrary // {}) + {
         LibreOfficePath: $soffice,
         GoogleDrive: {
@@ -393,8 +413,6 @@ jq \
           AnnouncementsFolderId: (if $sync then $ann else "" end)
         } })
     | .Broadcast = ((.Broadcast // {}) + { FFmpegPath: $ffmpeg })
-    | .HomeAssistant = ((.HomeAssistant // {}) + { Enabled: $haon } + (if $haurl != "" then { BaseUrl: $haurl } else {} end))
-    | .Novastar = ((.Novastar // {}) + { Enabled: $nvon } + (if $nvon then { Host: $nvhost } else {} end))
   ' "$OVERRIDES" > "$OVERRIDES.tmp" && mv "$OVERRIDES.tmp" "$OVERRIDES"
 chown "$HUMAN_USER:$HUMAN_USER" "$OVERRIDES"
 echo "  Dependency paths stamped: LibreOffice='/usr/bin/soffice' FFmpeg='/usr/bin/ffmpeg'"
@@ -470,8 +488,14 @@ echo "   Setup complete - Illumina $TAG_NAME is ready!"
 echo "=================================================="
 echo "   AVA PC Account: $HUMAN_USER"
 echo "   Auto sign-in  : $([ "$AUTO_LOGIN_ON" = true ] && echo 'configured' || echo 'off - normal logon screen')"
-echo "   Right Display : $RIGHT_ON   Streaming: $STREAM_ON   Drive sync: $SYNC_ON"
-echo "   Home Assistant: $([ "$HA_ON" = true ] && echo "$HA_URL" || echo 'off')   Novastar: $([ "$NV_ON" = true ] && echo "$NV_HOST" || echo 'off')"
+echo "   Right Display : $RIGHT_ON   Drive sync: $SYNC_ON"
+echo "   Languages     : ${LANG_NAMES[$PRIMARY_IDX]} (primary) + ${LANG_NAMES[$SECONDARY_IDX]} (secondary)"
+echo ""
+echo "  When you are ready for more, Menu->Settings grows with you:"
+echo "   - Displays       : CG overlay, Broadcast Encoder, confidence monitors"
+echo "   - Device Setup   : Tapo smart plugs (power schedules), Novastar brightness"
+echo "   - Appearance     : languages, hymn layouts, display fonts, themes"
+echo "   - Check for Updates : one-tap software and hymn/Bible library updates"
 echo ""
 echo "  Congratulations! You are all set! Here is how to start your first session:"
 echo ""

@@ -22,7 +22,7 @@ Illumina is the central hub of your live production environment, coordinating di
 
 ### Display Outputs
 * **Left & Right Displays:** The congregation-facing main outputs. LED video walls, laser projectors, and large-format LCD panels are all first-class citizens.
-* **CG Overlay:** A dedicated lower-third/chyron output, typically routed into a broadcast switcher or OBS via capture card. Optional — prepared when you enable Streaming/Broadcast during setup.
+* **CG Overlay:** A dedicated lower-third/chyron output, typically routed into a broadcast switcher or OBS via capture card. Optional — switch it on in **Menu → Settings → Displays** whenever your streaming hardware arrives.
 * **Confidence Monitors:** Smaller windowed previews near the operator or pulpit for lyrics, slides, and stream health.
 * **Aux Hall Display:** An overflow-room program player with independent audio routing for cry rooms, foyers, or secondary halls (part of a broadcast setup).
 
@@ -66,8 +66,9 @@ irm https://raw.githubusercontent.com/nickng70/Illumina-Installer/main/install-w
 The installer walks you through a short, self-explanatory setup:
 * **Access Token:** Paste your GitHub token (kept hidden as you type).
 * **Environment Profile:** A dedicated, locked-down kiosk account (`avauser`), or your current Windows account (great for trying Illumina on a laptop).
-* **Hardware & Integration Survey:** Five quick questions — Right Display, Streaming/Broadcast, Google Drive sync, Home Assistant device automation, and Novastar controller. ENTER means "No" — the safe default.
+* **Hardware & Language Survey:** Four quick questions — Right Display, Google Drive sync, and your primary + secondary display languages (English, Simplified/Traditional Chinese, Bahasa Indonesia, Bahasa Melayu). ENTER accepts the suggestion every time. Streaming/CG, smart plugs, and Novastar brightness aren't asked here: they're rarely wired up on install day, and **Menu → Settings** switches them on whenever you're ready.
 * **Auto Sign-In:** Boot straight into Illumina without a password. *Security note: this stores the account password in the machine registry, readable by administrators — the standard trade-off for a kiosk PC.*
+* **Tips while you wait:** During the downloads, the installer shares rotating "Did you know?" tips — a mini-tour of what Illumina can do once your hardware arrives.
 
 ### Step 4: You're Live
 That's it — Illumina is installed and running. The new **Illumina Portal** desktop shortcut opens your control panel, and your displays wake the moment it loads. Enable Auto Sign-In and the installer offers an optional reboot to activate the zero-touch boot sequence.
@@ -96,7 +97,7 @@ curl -sSL https://raw.githubusercontent.com/nickng70/Illumina-Installer/main/ins
 * **Sudo Password:** Authorizes the installation. *When typing passwords in a Linux terminal, the screen stays completely blank (no asterisks) — that's normal POSIX security; just type and press Enter.*
 * **Access Token:** Your GitHub read-only token.
 * **Environment Profile:** A dedicated `avauser` or your current account.
-* **Hardware & Integration Survey:** Displays, streaming, Drive sync, Home Assistant (with an optional one-command Docker install right here), and Novastar.
+* **Hardware & Language Survey:** Right Display, Google Drive sync, and your primary + secondary display languages — that's all. Streaming, Home Assistant, and Novastar live in **Menu → Settings** for when your hardware arrives (plus the same rotating tips while the downloads run).
 
 ### Step 4: You're Live
 Illumina is installed and running immediately. If you chose Auto Sign-In, an optional reboot activates the automated login sequence for future power cycles.
