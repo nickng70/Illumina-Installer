@@ -107,8 +107,9 @@ echo "  the downloads run."
 # ----------------------------- [1/9] DEPENDENCIES ---------------------------
 echo -e "\n==> [1/9] Accessing GitHub Illumina repository..."
 apt-get update -qq > /dev/null
-# Added zenity for the native Linux pop-up message box
-apt-get install -y -qq curl unzip jq openssl wmctrl zenity libnss3-tools > /dev/null
+# Added zenity for the native Linux pop-up message box; libcap2-bin provides
+# setcap, which lets the unprivileged kiosk account bind ports 80/443.
+apt-get install -y -qq curl unzip jq openssl wmctrl zenity libnss3-tools libcap2-bin > /dev/null
 # curl is NOT preinstalled on a fresh Ubuntu - and neither are some of the
 # others on minimal installs. Verify the essentials actually landed rather
 # than failing mysteriously three steps later.
@@ -343,41 +344,10 @@ chmod 500 "$INSTALL_DIR/Data"
 echo "  Content folders prepared with native Linux permissions (locked to $HUMAN_USER)."
 echo "$TAG_NAME" > "$MACHINE_DIR/current-version"
 
-# Launch check: boot the freshly extracted engine on a throwaway localhost
-# port (Development mode keeps kiosk automation off; ASPNETCORE_URLS sidesteps
-# the HTTPS certificate, which only arrives in the next step). Success = the
-# portal answers HTTP within 30s; a crash aborts the install with the log tail.
-echo "  Running a quick launch check to prove the engine starts cleanly..."
-SMOKE_PORT=5599
-SMOKE_LOG=/tmp/illumina-launch-check.log
-# Launched from the install dir on purpose: ASP.NET Core's content root is
-# the current working directory, and the app crashes at startup without its
-# wwwroot/Data folders beside it.
-(cd "$INSTALL_DIR" && ASPNETCORE_ENVIRONMENT=Development ASPNETCORE_URLS="http://127.0.0.1:$SMOKE_PORT" \
-    ./Illumina > "$SMOKE_LOG" 2>&1) &
-SMOKE_PID=$!
-SMOKE_OK=false
-for i in $(seq 1 30); do
-    kill -0 "$SMOKE_PID" 2>/dev/null || break
-    CODE=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$SMOKE_PORT/" 2>/dev/null || true)
-    case "$CODE" in 2*|3*) SMOKE_OK=true; break;; esac
-    sleep 1
-done
-kill "$SMOKE_PID" 2>/dev/null || true
-wait "$SMOKE_PID" 2>/dev/null || true
-if [ "$SMOKE_OK" = true ]; then
-    # The launch check ran as root and may have dropped root-owned temp files
-    # into the writable folders - hand everything back to the runtime account.
-    for W_DIR in AppData MediaContent SlideContent Recordings; do
-        chown -R "$HUMAN_USER:$HUMAN_USER" "$INSTALL_DIR/$W_DIR" 2>/dev/null || true
-    done
-    echo "  Launch check passed - the Illumina engine answered on its test port."
-else
-    echo "  ERROR: Illumina did not start correctly on this PC. The last log lines:"
-    tail -n 15 "$SMOKE_LOG" 2>/dev/null | sed 's/^/    /'
-    echo "  Full log: $SMOKE_LOG"
-    exit 1
-fi
+# Let the unprivileged kiosk account bind ports 80/443 (production config).
+# No-op where the kernel already allows unprivileged binding; essential on
+# older LTS kernels. Re-applied by the updater after every binary swap.
+setcap 'cap_net_bind_service=+ep' "$INSTALL_DIR/Illumina" 2>/dev/null || true
 
 # ----------------------------- [8/9] SURVEY, CERT, OVERRIDES ----------------
 echo -e "\n==> [7/9] Site survey, HTTPS certificate, and machine settings..."
@@ -507,6 +477,40 @@ jq \
   ' "$OVERRIDES" > "$OVERRIDES.tmp" && mv "$OVERRIDES.tmp" "$OVERRIDES"
 chown "$HUMAN_USER:$HUMAN_USER" "$OVERRIDES"
 echo "  Dependency paths stamped: LibreOffice='/usr/bin/soffice' FFmpeg='/usr/bin/ffmpeg'"
+
+# Launch check: boot the freshly installed engine EXACTLY as it will run in
+# production - the runtime account, the install dir as working directory
+# (ASP.NET Core's content root is the cwd), the real 80/443 bindings from the
+# freshly stamped overrides + certificate. Success = the portal answers
+# within 40s; a crash aborts the install with the log tail. On success the
+# engine is LEFT RUNNING, so the install ends with a live portal.
+# (A previous version tested a synthetic Development port via ASPNETCORE_URLS,
+# which the minimal-hosting config precedence silently ignores - appsettings
+# Urls wins over that env var - so it tested nothing real and died on the
+# missing Linux dev cert. Testing the real thing is simpler AND truthful.)
+echo "  Running a quick launch check to prove the engine starts cleanly..."
+SMOKE_LOG=/tmp/illumina-launch-check.log
+sudo -u "$HUMAN_USER" bash -c "cd '$INSTALL_DIR' && exec ./Illumina" > "$SMOKE_LOG" 2>&1 &
+SMOKE_PID=$!
+SMOKE_OK=false
+for i in $(seq 1 40); do
+    kill -0 "$SMOKE_PID" 2>/dev/null || break
+    CODE=$(curl -sk -o /dev/null -w '%{http_code}' "https://127.0.0.1/" 2>/dev/null || true)
+    case "$CODE" in 2*|3*) SMOKE_OK=true; break;; esac
+    CODE=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1/" 2>/dev/null || true)
+    case "$CODE" in 2*|3*) SMOKE_OK=true; break;; esac
+    sleep 1
+done
+if [ "$SMOKE_OK" = true ]; then
+    echo "  Launch check passed - the portal is already live at https://localhost."
+else
+    kill "$SMOKE_PID" 2>/dev/null || true
+    pkill -f "$INSTALL_DIR/Illumina" 2>/dev/null || true
+    echo "  ERROR: Illumina did not start correctly on this PC. The last log lines:"
+    tail -n 15 "$SMOKE_LOG" 2>/dev/null | sed 's/^/    /'
+    echo "  Full log: $SMOKE_LOG"
+    exit 1
+fi
 
 # ----------------------------- [9/9] HELPERS, SHORTCUTS, NETWORK ------------
 echo -e "\n==> [8/9] Writing the everyday shortcuts..."
@@ -645,8 +649,8 @@ echo "   - Check for Updates : one-tap software and hymn/Bible library updates"
 echo ""
 echo "  Congratulations! You are all set! Here is how to start your first session:"
 echo ""
-echo "   1. RESTART this PC (or click 'Restart Illumina (only if frozen)'"
-echo "      on the desktop). This starts the engine in the background."
+echo "   1. The engine is ALREADY RUNNING (the launch check started it), and"
+echo "      from the next boot on it will start itself automatically."
 echo ""
 echo "   2. Click the 'Illumina Portal' icon on the taskbar."
 echo "      The control panel will open, and your displays will wake up!"
