@@ -124,6 +124,14 @@ Once deployed, the PC is designed to be as stress-free as possible during live s
 ### Powering On
 If Auto Sign-In was enabled, simply press the power button. The system boots, signs in silently, and waits for the portal to open — at which point every display wakes on its own.
 
+### How Illumina Starts (for the curious)
+There is no Windows Service or systemd unit. The backend starts through the AVA account's own login, so it always runs as the unprivileged kiosk user:
+
+* **Windows:** `Illumina Backend AutoStart.lnk` in the AVA account's Startup folder (sign in as `avauser`, press **Win+R** → `shell:startup`). It's deliberately *not* in `shell:common startup` — the backend must never run elevated or under the wrong account.
+* **Ubuntu:** `~/.config/autostart/illumina-backend.desktop` in the AVA account, launched by GDM3 after auto sign-in.
+
+Both run the same `start-backend` script: stop any stale backend, start a fresh one hidden in the background. Illumina also writes a rolling daily log to `AppData/logs/` inside the install folder (14 days kept) — the first place to look when troubleshooting, and attachable to a **Menu → Tell Illumina** report with one tick.
+
 ### The Shortcuts
 
 | Shortcut | Purpose | System Behavior |
