@@ -422,6 +422,17 @@ $rightWall = Read-Host "  [1/4] Do you have a RIGHT Display (in addition to the 
 $sync      = Read-Host "  [2/4] Retrieve Prayer/Announcement slides from Google Drive? [y/N] (ENTER = No)"
 $rightWallOn = ($rightWall -match '^[yY]')
 $syncOn      = ($sync -match '^[yY]')
+# The folder IDs belong to question 2 - ask them immediately while the
+# operator still has the Drive browser tab open, not three questions later.
+$prayerId = ""; $annId = ""
+if ($syncOn) {
+    $prayerId = Read-Host "       Prayer slides folder ID (Google Drive)"
+    $annId    = Read-Host "       Announcements slides folder ID (Google Drive)"
+    if (-not $prayerId -or -not $annId) {
+        $syncOn = $false
+        Log "A folder ID was left empty, so Drive sync stays OFF on this machine."
+    }
+}
 
 # Display languages. On a re-install the machine's existing choices become
 # the defaults (ENTER keeps them); fresh installs default to English primary
@@ -462,7 +473,6 @@ $secondaryLang = $LangCodes[$secondaryIdx]
 Log "Survey recorded - Right Display: $rightWallOn | Drive sync: $syncOn | Languages: $($LangNames[$primaryIdx]) + $($LangNames[$secondaryIdx])"
 
 $keyJson  = "$MachineDir\key.json"
-$prayerId = ""; $annId = ""
 if ($syncOn) {
     if (Test-Path $keyJson) { Log "Reusing the Google Drive key already stored on this machine." }
     else {
@@ -478,12 +488,6 @@ if ($syncOn) {
     }
     if (Test-Path $keyJson) {
         icacls $keyJson /inheritance:r /grant:r "SYSTEM:F" "Administrators:F" "${HumanUser}:R" | Out-Null
-        $prayerId = Read-Host "  Prayer slides folder ID (Google Drive)"
-        $annId    = Read-Host "  Announcements slides folder ID (Google Drive)"
-        if (-not $prayerId -or -not $annId) {
-            $syncOn = $false
-            Log "A folder ID was left empty, so Drive sync stays OFF on this machine."
-        }
     } else { $syncOn = $false; Log "No Drive key available, so Drive sync stays OFF on this machine." }
 }
 

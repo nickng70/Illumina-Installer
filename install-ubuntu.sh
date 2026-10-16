@@ -679,7 +679,19 @@ if [ "$USE_AVA_USER" = true ]; then
     echo "  system maintenance later, sign in as $INTERACTIVE_USER instead."
     echo ""
 fi
+# The launch-check crashes during earlier failed install attempts (if any)
+# left core dumps in /var/crash, and Apport nags about them with a "System
+# program problem detected" popup at the next login. Sweep ours away - a
+# kiosk PC should never greet a volunteer with a crash dialog.
+rm -f /var/crash/*[Ii]llumina* 2>/dev/null || true
+
 if [ "$AUTO_LOGIN_ON" = true ]; then
     read -p "  Would you like to restart now to finish setup? [y/N] (ENTER = No): " ANS
-    if [[ "$ANS" =~ ^[yY]$ ]]; then reboot; fi
+    if [[ "$ANS" =~ ^[yY]$ ]]; then
+        # Plain 'reboot' is refused while another user's graphical session is
+        # still logged in (GNOME holds a shutdown inhibitor). The operator
+        # explicitly asked for the restart, so -i (ignore inhibitors) is the
+        # correct tool here.
+        systemctl reboot -i
+    fi
 fi
