@@ -108,7 +108,9 @@ echo -e "\n==> [1/9] Accessing GitHub Illumina repository..."
 apt-get update -qq > /dev/null
 # Added zenity for the native Linux pop-up message box; libcap2-bin provides
 # setcap, which lets the unprivileged kiosk account bind ports 80/443.
-apt-get install -y -qq curl unzip jq openssl wmctrl zenity libnss3-tools libcap2-bin > /dev/null
+# x11-utils (xprop) and x11-xserver-utils (xrandr) feed the app's monitor
+# detection - the same "detect displays" flow the Windows build enjoys.
+apt-get install -y -qq curl unzip jq openssl wmctrl zenity libnss3-tools libcap2-bin x11-utils x11-xserver-utils > /dev/null
 # curl is NOT preinstalled on a fresh Ubuntu - and neither are some of the
 # others on minimal installs. Verify the essentials actually landed rather
 # than failing mysteriously three steps later.
@@ -119,7 +121,7 @@ for TOOL in curl unzip jq openssl; do
         exit 1
     fi
 done
-echo "  Core tools (curl, unzip, jq, openssl, wmctrl, zenity, libnss3-tools) are ready."
+echo "  Core tools (curl, unzip, jq, openssl, wmctrl, zenity, libnss3-tools, xrandr) are ready."
 
 # ----------------------------- [2/9] GITHUB TOKEN ---------------------------
 mkdir -p "$MACHINE_DIR"
@@ -237,18 +239,31 @@ if [ -f "$TOKEN_FILE" ]; then
 fi
 
 GDM_CONF="/etc/gdm3/custom.conf"
-if [ "$AUTO_LOGIN_ON" = true ] && [ -f "$GDM_CONF" ]; then
-    if grep -q "^AutomaticLoginEnable" "$GDM_CONF"; then
-        sed -i "s/^AutomaticLoginEnable=.*/AutomaticLoginEnable=true/" "$GDM_CONF"
-        sed -i "s/^AutomaticLogin=.*/AutomaticLogin=$HUMAN_USER/" "$GDM_CONF"
+# Write KEY=VALUE under [daemon] no matter what the distro shipped: uncomment
+# a commented entry, overwrite a live one, insert after [daemon], or append
+# the whole section when the file has none (observed on fresh Ubuntu).
+ensure_gdm_conf() {
+    if grep -qE "^#?[[:space:]]*$1[[:space:]]*=" "$GDM_CONF"; then
+        sed -i -E "s|^#?[[:space:]]*$1[[:space:]]*=.*|$1=$2|" "$GDM_CONF"
+    elif grep -q "^\[daemon\]" "$GDM_CONF"; then
+        sed -i "/^\[daemon\]/a $1=$2" "$GDM_CONF"
     else
-        sed -i "/^\[daemon\]/a AutomaticLoginEnable=true\nAutomaticLogin=$HUMAN_USER" "$GDM_CONF"
+        printf '\n[daemon]\n%s=%s\n' "$1" "$2" >> "$GDM_CONF"
     fi
-else
-    if [ -f "$GDM_CONF" ]; then
-        sed -i "s/^AutomaticLoginEnable=.*/AutomaticLoginEnable=false/" "$GDM_CONF" || true
+}
+if [ -f "$GDM_CONF" ]; then
+    if [ "$AUTO_LOGIN_ON" = true ]; then
+        ensure_gdm_conf AutomaticLoginEnable true
+        ensure_gdm_conf AutomaticLogin "$HUMAN_USER"
+    else
+        ensure_gdm_conf AutomaticLoginEnable false
+        echo "  Auto sign-in left OFF - the PC keeps its normal logon screen."
     fi
-    echo "  Auto sign-in left OFF - the PC keeps its normal logon screen."
+    # The app positions its kiosk windows and detects monitors through
+    # wmctrl/xrandr, which only work on X11 - Wayland locks the compositor
+    # against exactly these calls. Pin the login session to X11 so window
+    # snapping and display detection behave identically on every PC.
+    ensure_gdm_conf WaylandEnable false
 fi
 
 # ----------------------------- [7/9] APP FILES & PERMISSIONS ----------------
@@ -433,8 +448,13 @@ echo ""
 echo "  Illumina serves its portal over HTTPS on this PC only. We create a private"
 echo "  100-year certificate, trust it system-wide and in Chrome, and hand Kestrel"
 echo "  the PFX path via the machine's overrides layer."
+# Chrome has REQUIRED a subjectAltName since 2017 (CN-only certs get
+# ERR_CERT_COMMON_NAME_INVALID - the "connection is not private" warning
+# seen on the first Ubuntu install). The Windows installer gets a SAN for
+# free from New-SelfSignedCertificate -DnsName; openssl needs it spelled out.
 PFX_PATH="$MACHINE_DIR/illumina.pfx"; PFX_PASS="IlluminaKioskCert"
-openssl req -x509 -newkey rsa:4096 -keyout /tmp/illumina.key -out /tmp/illumina.crt -days 36500 -nodes -subj "/CN=localhost" > /dev/null 2>&1
+openssl req -x509 -newkey rsa:4096 -keyout /tmp/illumina.key -out /tmp/illumina.crt -days 36500 -nodes \
+    -subj "/CN=localhost" -addext "subjectAltName=DNS:localhost,IP:127.0.0.1" > /dev/null 2>&1
 openssl pkcs12 -export -out "$PFX_PATH" -inkey /tmp/illumina.key -in /tmp/illumina.crt -passout pass:"$PFX_PASS" > /dev/null 2>&1
 cp /tmp/illumina.crt /usr/local/share/ca-certificates/illumina.crt
 update-ca-certificates > /dev/null 2>&1
@@ -450,6 +470,10 @@ import_nss_cert() {
     if [ ! -f "$U_HOME/.pki/nssdb/cert9.db" ]; then
         sudo -u "$U" certutil -d sql:"$U_HOME/.pki/nssdb" -N --empty-password > /dev/null 2>&1 || true
     fi
+    # Delete any previous Illumina nickname first: certutil -A silently fails
+    # when the nickname already exists, which would strand a stale (e.g.
+    # pre-SAN) certificate on re-install.
+    sudo -u "$U" certutil -d sql:"$U_HOME/.pki/nssdb" -D -n Illumina > /dev/null 2>&1 || true
     sudo -u "$U" certutil -d sql:"$U_HOME/.pki/nssdb" -A -t "C,," -n Illumina -i /tmp/illumina.crt > /dev/null 2>&1 || true
 }
 import_nss_cert "$HUMAN_USER"
@@ -550,23 +574,33 @@ fi
 EOF
 chmod +x "$INSTALL_DIR/start-backend.sh"
 
-# Taskbar pinner: adds the portal to the GNOME dash (taskbar) favorites.
-# GNOME favorites can only be changed from inside the user's own graphical
-# session, so the installer drops a one-time autostart that pins the icon at
-# the account's first login and then removes itself (an immediate pin is also
-# attempted below when the account happens to be logged in already).
+# Taskbar pinner: adds the portal to the GNOME dash (taskbar) favorites, and
+# marks the desktop shortcuts "trusted" so GNOME stops showing the
+# "Allow launching" prompt (that metadata can only be set from inside the
+# user's live graphical session - hence this runs at first login, not at
+# install time). GNOME favorites can only be changed from inside the user's
+# own session too, so the installer drops a one-time autostart that runs this
+# at the account's first login and then removes itself (an immediate run is
+# also attempted below when the account happens to be logged in already).
 cat <<'EOF' > "$INSTALL_DIR/pin-taskbar.sh"
 #!/bin/bash
 APPS=$(gsettings get org.gnome.shell favorite-apps 2>/dev/null) || exit 0
 case "$APPS" in
-  *illumina-portal.desktop*) exit 0;;
+  *illumina-portal.desktop*) ;;
+  *)
+    if [ "$APPS" = "@as []" ] || [ -z "$APPS" ]; then
+        NEW="['illumina-portal.desktop']"
+    else
+        NEW=$(echo "$APPS" | sed "s/]$/, 'illumina-portal.desktop']/")
+    fi
+    gsettings set org.gnome.shell favorite-apps "$NEW" 2>/dev/null || true
+    ;;
 esac
-if [ "$APPS" = "@as []" ] || [ -z "$APPS" ]; then
-    NEW="['illumina-portal.desktop']"
-else
-    NEW=$(echo "$APPS" | sed "s/]$/, 'illumina-portal.desktop']/")
-fi
-gsettings set org.gnome.shell favorite-apps "$NEW" 2>/dev/null || true
+# Trust the desktop shortcuts so they launch on a plain double-click.
+for f in "$HOME/Desktop/"*.desktop; do
+    [ -e "$f" ] && gio set "$f" metadata::trusted true 2>/dev/null
+done
+exit 0
 EOF
 chmod +x "$INSTALL_DIR/pin-taskbar.sh"
 
@@ -579,13 +613,13 @@ AUTOSTART_DIR="$HUMAN_HOME/.config/autostart"
 sudo -u "$HUMAN_USER" mkdir -p "$DESKTOP_DIR" "$AUTOSTART_DIR"
 
 create_desktop_file() {
-    local FILE_PATH=$1 NAME=$2 EXEC=$3
+    local FILE_PATH=$1 NAME=$2 EXEC=$3 ICON=${4:-utilities-terminal}
     cat <<EOF > "$FILE_PATH"
 [Desktop Entry]
 Type=Application
 Name=$NAME
 Exec=$EXEC
-Icon=utilities-terminal
+Icon=$ICON
 Terminal=false
 EOF
     chown "$HUMAN_USER:$HUMAN_USER" "$FILE_PATH"; chmod +x "$FILE_PATH"
@@ -596,8 +630,8 @@ EOF
 rm -f "$DESKTOP_DIR"/illumina*.desktop "$DESKTOP_DIR"/restart*.desktop "$AUTOSTART_DIR"/illumina*.desktop 2>/dev/null || true
 
 # 1. The Portal Launcher lives in the system application menu so the taskbar
-# (GNOME dash) can find and pin it - no desktop icon to double-click by
-# mistake mid-service.
+# (GNOME dash) can find and pin it, AND on the desktop as a familiar
+# double-click icon - both point at the same portal.
 cat <<EOF > /usr/share/applications/illumina-portal.desktop
 [Desktop Entry]
 Type=Application
@@ -609,6 +643,7 @@ Terminal=false
 Categories=Utility;
 EOF
 chmod 644 /usr/share/applications/illumina-portal.desktop
+create_desktop_file "$DESKTOP_DIR/illumina-portal.desktop" "Illumina Portal" "$CHROME_BIN_SAFE --app=$PORTAL_URL" "$INSTALL_DIR/wwwroot/icon-256.png"
 
 # Pin it to the taskbar right away when the account's session is available...
 USER_UID=$(id -u "$HUMAN_USER")
@@ -634,7 +669,7 @@ create_desktop_file "$DESKTOP_DIR/restart-illumina.desktop" "Restart Illumina (o
 # 3. The Auto-Start Shortcut (Runs silently on every login - auto SIGN-IN only
 # controls whether a password is needed, never whether the backend starts)
 create_desktop_file "$AUTOSTART_DIR/illumina-backend.desktop" "Illumina Backend" "$INSTALL_DIR/start-backend.sh --silent"
-echo "  'Illumina Portal' is pinned to the taskbar for $HUMAN_USER; the emergency restart stays on the desktop, clearly marked."
+echo "  'Illumina Portal' is on the desktop and pinned to the taskbar for $HUMAN_USER; the emergency restart sits beside it, clearly marked."
 
 echo -e "\n==> [9/9] Opening the network doors and keeping the PC awake..."
 # The portal binds HTTPS to localhost only, so no inbound 443 rule is needed
