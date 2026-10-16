@@ -1,6 +1,8 @@
 # Illumina AVA PC Deployment Guide
 
-Welcome, and thank you for helping your church bring **Illumina** to life. Illumina is built for True Jesus Church as the next generation of TJC Church Presenter, serving as a single operational hub for services, media, streaming, recording, and archives.
+Welcome, and thank you for helping your church bring **Illumina** to life. Illumina is the next generation of TJC Church Presenter, built for True Jesus Church. To Church Presenter, thank you for more than 20 wonderful years of service. Illumina carries that story forward as a single operational hub for services, media, streaming, recording, and archives. 
+
+> 💡 *Illumina is built with Blazor and .NET, giving us a modern, web-based foundation that is easier to maintain, update, and extend. It runs on both Windows and Linux, and its browser-based interface works on iOS and Android devices too, so the whole congregation can follow along from any device.*
 
 This guide will turn a standard Windows or Ubuntu PC into a dedicated, self-healing Illumina kiosk in just a few minutes. No IT background is needed. The installer asks a handful of simple questions, and pressing ENTER always accepts the safe default. It then takes care of everything else, including certificates, dependencies, displays, and firewall settings, quietly and reliably.
 
