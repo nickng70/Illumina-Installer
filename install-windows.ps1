@@ -637,11 +637,13 @@ foreach ($spot in $spots) {
 $Wsh   = New-Object -ComObject WScript.Shell
 $PsExe = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
 
-# 1. The Portal Shortcut (Native Chrome, no PowerShell wrapper)
+# 1. The Portal Shortcut (Native Chrome, no PowerShell wrapper) - branded
+# with the Illumina lampstand icon (ships in the zip under wwwroot), visually
+# distinct from the emergency restart shortcut's refresh glyph.
 $portal = $Wsh.CreateShortcut("$UserDesktop\Illumina Portal.lnk")
 $portal.TargetPath   = $ChromeExe
 $portal.Arguments    = "--app=$PortalUrl"
-$portal.IconLocation = "$ChromeExe,0"
+$portal.IconLocation = "$InstallDir\wwwroot\favicon.ico"
 $portal.Save()
 
 # 2. The Backend Restart Shortcut (Shows the friendly pop-up). The cautionary

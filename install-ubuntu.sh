@@ -577,7 +577,7 @@ Type=Application
 Name=Illumina Portal
 Comment=Illumina operator control panel
 Exec=$CHROME_BIN_SAFE --app=$PORTAL_URL
-Icon=google-chrome
+Icon=$INSTALL_DIR/wwwroot/icon-256.png
 Terminal=false
 Categories=Utility;
 EOF
