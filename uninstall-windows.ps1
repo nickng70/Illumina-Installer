@@ -51,6 +51,7 @@ foreach ($spot in $spots) {
         # Legacy shortcuts cleanup
         Get-ChildItem $spot -Filter "Illumina*.lnk" -ErrorAction SilentlyContinue | Remove-Item -Force
         Get-ChildItem $spot -Filter "Restart Illumina*.lnk" -ErrorAction SilentlyContinue | Remove-Item -Force
+        Get-ChildItem $spot -Filter "⚠*.lnk" -ErrorAction SilentlyContinue | Remove-Item -Force
     }
 }
 

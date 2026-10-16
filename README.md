@@ -87,10 +87,10 @@ That's it — Illumina is installed and running. The new **Illumina Portal** des
 Press **Ctrl + Alt + T**.
 
 ### Step 2: Run the Deployment Script
-Copy the command below, paste it into the terminal, and press **Enter**:
+Copy the command below, paste it into the terminal, and press **Enter** (curl isn't preinstalled on a fresh Ubuntu, so the command installs it first):
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/nickng70/Illumina-Installer/main/install-ubuntu.sh -o /tmp/install-ubuntu.sh && sudo bash /tmp/install-ubuntu.sh
+sudo apt-get update && sudo apt-get install -y curl && curl -sSL https://raw.githubusercontent.com/nickng70/Illumina-Installer/main/install-ubuntu.sh -o /tmp/install-ubuntu.sh && sudo bash /tmp/install-ubuntu.sh
 ```
 
 ### Step 3: A Few Friendly Questions
@@ -124,12 +124,12 @@ Once deployed, the PC is designed to be as stress-free as possible during live s
 ### Powering On
 If Auto Sign-In was enabled, simply press the power button. The system boots, signs in silently, and waits for the portal to open — at which point every display wakes on its own.
 
-### The Desktop Shortcuts
+### The Shortcuts
 
 | Shortcut | Purpose | System Behavior |
 | :--- | :--- | :--- |
-| **Illumina Portal** | **Standard Launch** | Opens the operator portal. Completely non-destructive; safe to click at any time, even during a live broadcast. |
-| **Restart Illumina Backend** | **Emergency Recovery** | Force-closes the backend and kiosk display windows, then performs a clean launch. *Warning: this ends any active broadcast or recording.* |
+| **Illumina Portal** | **Standard Launch** | Opens the operator portal. Completely non-destructive; safe to click at any time, even during a live broadcast. Pinned to the **taskbar** on Ubuntu (pinned automatically at first login); a **desktop** shortcut on Windows. |
+| **⚠ Restart Illumina (only if frozen)** | **Emergency Recovery** | Force-closes the backend and kiosk display windows, then performs a clean launch. *Warning: this ends any active broadcast or recording — the cautionary name is deliberate, so volunteers never mistake it for the everyday launch.* |
 
 ---
 
@@ -165,7 +165,7 @@ irm https://raw.githubusercontent.com/nickng70/Illumina-Installer/main/uninstall
 
 **Ubuntu:**
 ```bash
-curl -sSL https://raw.githubusercontent.com/nickng70/Illumina-Installer/main/uninstall-ubuntu.sh -o /tmp/uninstall-ubuntu.sh && sudo bash /tmp/uninstall-ubuntu.sh
+sudo apt-get install -y curl && curl -sSL https://raw.githubusercontent.com/nickng70/Illumina-Installer/main/uninstall-ubuntu.sh -o /tmp/uninstall-ubuntu.sh && sudo bash /tmp/uninstall-ubuntu.sh
 ```
 
 ---

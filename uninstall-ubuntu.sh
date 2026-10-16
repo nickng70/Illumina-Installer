@@ -41,6 +41,8 @@ rm -f "$AUTOSTART_DIR"/illumina*.desktop 2>/dev/null || true
 # Also clean up avauser's desktop just in case
 rm -f /home/avauser/Desktop/illumina*.desktop 2>/dev/null || true
 rm -f /home/avauser/.config/autostart/illumina*.desktop 2>/dev/null || true
+# The taskbar-pinned portal launcher lives in the system application menu
+rm -f /usr/share/applications/illumina-portal.desktop 2>/dev/null || true
 
 # 3. Remove Firewall rules
 echo -e "\n==> Removing firewall rules..."

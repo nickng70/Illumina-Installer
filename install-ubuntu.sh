@@ -109,6 +109,16 @@ echo -e "\n==> [1/9] Accessing GitHub Illumina repository..."
 apt-get update -qq > /dev/null
 # Added zenity for the native Linux pop-up message box
 apt-get install -y -qq curl unzip jq openssl wmctrl zenity libnss3-tools > /dev/null
+# curl is NOT preinstalled on a fresh Ubuntu - and neither are some of the
+# others on minimal installs. Verify the essentials actually landed rather
+# than failing mysteriously three steps later.
+for TOOL in curl unzip jq openssl; do
+    if ! command -v "$TOOL" > /dev/null 2>&1; then
+        echo "  ERROR: the '$TOOL' tool could not be installed. Please check this PC's"
+        echo "  internet connection, run 'sudo apt update', then re-run this installer."
+        exit 1
+    fi
+done
 echo "  Core tools (curl, unzip, jq, openssl, wmctrl, zenity, libnss3-tools) are ready."
 
 # ----------------------------- [2/9] GITHUB TOKEN ---------------------------
@@ -259,9 +269,38 @@ if [ -d "$INSTALL_DIR/Data/Localization" ]; then
     mkdir -p "$PRESERVE/Data"
     mv "$INSTALL_DIR/Data/Localization" "$PRESERVE/Data/Localization"
 fi
+# Extract into a STAGING folder first and verify it before swapping anything
+# in. unzip exit codes: 0 = success, 1 = warnings only (e.g. the historical
+# "backslashes as path separators" notice from Windows-built zips) - both are
+# fine; anything above 1 is a real error and must not be swallowed by set -e.
+STAGE=$(mktemp -d)
+UNZIP_RC=0
+unzip -q "$ZIP_FILE" -d "$STAGE" || UNZIP_RC=$?
+rm -f "$ZIP_FILE"
+if [ "$UNZIP_RC" -gt 1 ]; then
+    echo "  ERROR: the release package could not be extracted (unzip error $UNZIP_RC)."
+    echo "  The download may have been interrupted - please re-run this installer."
+    echo "  Your preserved settings and libraries are safe in: $PRESERVE"
+    rm -rf "$STAGE"
+    exit 1
+fi
+if [ ! -f "$STAGE/Illumina" ]; then
+    echo "  ERROR: the extracted package does not contain the expected Illumina binary."
+    if ls "$STAGE" | grep -q '\\'; then
+        echo "  This package was published with an old publisher that used Windows-style"
+        echo "  backslash paths. Please publish a fresh release and run this installer again."
+    else
+        echo "  The download looks incomplete - please re-run this installer."
+    fi
+    echo "  Your preserved settings and libraries are safe in: $PRESERVE"
+    rm -rf "$STAGE"
+    exit 1
+fi
 rm -rf "$INSTALL_DIR"; mkdir -p "$INSTALL_DIR"
-unzip -q "$ZIP_FILE" -d "$INSTALL_DIR"; rm -f "$ZIP_FILE"
-# A zip built on Windows carries no Unix exec bits - restore them.
+cp -a "$STAGE/." "$INSTALL_DIR/"
+rm -rf "$STAGE"
+# A zip built on Windows carries no Unix exec bits - restore them (harmless if
+# the package already stamped them via entry attributes).
 chmod +x "$INSTALL_DIR/Illumina" 2>/dev/null || true
 for ITEM in AppData MediaContent SlideContent Recordings; do
     if [ -d "$PRESERVE/$ITEM" ]; then
@@ -287,6 +326,39 @@ chown -R "$HUMAN_USER:$HUMAN_USER" "$INSTALL_DIR/Data"
 chmod 500 "$INSTALL_DIR/Data"
 echo "  Content folders prepared with native Linux permissions (locked to $HUMAN_USER)."
 echo "$TAG_NAME" > "$MACHINE_DIR/current-version"
+
+# Launch check: boot the freshly extracted engine on a throwaway localhost
+# port (Development mode keeps kiosk automation off; ASPNETCORE_URLS sidesteps
+# the HTTPS certificate, which only arrives in the next step). Success = the
+# portal answers HTTP within 30s; a crash aborts the install with the log tail.
+echo "  Running a quick launch check to prove the engine starts cleanly..."
+SMOKE_PORT=5599
+SMOKE_LOG=/tmp/illumina-launch-check.log
+ASPNETCORE_ENVIRONMENT=Development ASPNETCORE_URLS="http://127.0.0.1:$SMOKE_PORT" \
+    "$INSTALL_DIR/Illumina" > "$SMOKE_LOG" 2>&1 &
+SMOKE_PID=$!
+SMOKE_OK=false
+for i in $(seq 1 30); do
+    kill -0 "$SMOKE_PID" 2>/dev/null || break
+    CODE=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$SMOKE_PORT/" 2>/dev/null || true)
+    case "$CODE" in 2*|3*) SMOKE_OK=true; break;; esac
+    sleep 1
+done
+kill "$SMOKE_PID" 2>/dev/null || true
+wait "$SMOKE_PID" 2>/dev/null || true
+if [ "$SMOKE_OK" = true ]; then
+    # The launch check ran as root and may have dropped root-owned temp files
+    # into the writable folders - hand everything back to the runtime account.
+    for W_DIR in AppData MediaContent SlideContent Recordings; do
+        chown -R "$HUMAN_USER:$HUMAN_USER" "$INSTALL_DIR/$W_DIR" 2>/dev/null || true
+    done
+    echo "  Launch check passed - the Illumina engine answered on its test port."
+else
+    echo "  ERROR: Illumina did not start correctly on this PC. The last log lines:"
+    tail -n 15 "$SMOKE_LOG" 2>/dev/null | sed 's/^/    /'
+    echo "  Full log: $SMOKE_LOG"
+    exit 1
+fi
 
 # ----------------------------- [8/9] SURVEY, CERT, OVERRIDES ----------------
 echo -e "\n==> [7/9] Site survey, HTTPS certificate, and machine settings..."
@@ -433,11 +505,31 @@ nohup "\$APP" > /dev/null 2>&1 &
 
 if [ "\$1" != "--silent" ]; then
     if command -v zenity > /dev/null 2>&1; then
-        zenity --info --title="Illumina AVA PC" --text="The Illumina backend is now running in the background.\n\nPlease click the 'Illumina Portal' shortcut on your desktop to open the control panel." --width=400 > /dev/null 2>&1 || true
+        zenity --info --title="Illumina AVA PC" --text="The Illumina backend is now running in the background.\n\nPlease click the 'Illumina Portal' icon on the taskbar to open the control panel." --width=400 > /dev/null 2>&1 || true
     fi
 fi
 EOF
 chmod +x "$INSTALL_DIR/start-backend.sh"
+
+# Taskbar pinner: adds the portal to the GNOME dash (taskbar) favorites.
+# GNOME favorites can only be changed from inside the user's own graphical
+# session, so the installer drops a one-time autostart that pins the icon at
+# the account's first login and then removes itself (an immediate pin is also
+# attempted below when the account happens to be logged in already).
+cat <<'EOF' > "$INSTALL_DIR/pin-taskbar.sh"
+#!/bin/bash
+APPS=$(gsettings get org.gnome.shell favorite-apps 2>/dev/null) || exit 0
+case "$APPS" in
+  *illumina-portal.desktop*) exit 0;;
+esac
+if [ "$APPS" = "@as []" ] || [ -z "$APPS" ]; then
+    NEW="['illumina-portal.desktop']"
+else
+    NEW=$(echo "$APPS" | sed "s/]$/, 'illumina-portal.desktop']/")
+fi
+gsettings set org.gnome.shell favorite-apps "$NEW" 2>/dev/null || true
+EOF
+chmod +x "$INSTALL_DIR/pin-taskbar.sh"
 
 DESKTOP_DIR="$USER_HOME/Desktop"
 AUTOSTART_DIR="$USER_HOME/.config/autostart"
@@ -460,16 +552,46 @@ EOF
 # Clean up old shortcuts
 rm -f "$DESKTOP_DIR"/illumina*.desktop "$DESKTOP_DIR"/restart*.desktop "$AUTOSTART_DIR"/illumina*.desktop 2>/dev/null || true
 
-# 1. The Portal Shortcut (Native Chrome, no wrapper)
-create_desktop_file "$DESKTOP_DIR/illumina-portal.desktop" "Illumina Portal" "$CHROME_BIN_SAFE --app=$PORTAL_URL"
+# 1. The Portal Launcher lives in the system application menu so the taskbar
+# (GNOME dash) can find and pin it - no desktop icon to double-click by
+# mistake mid-service.
+cat <<EOF > /usr/share/applications/illumina-portal.desktop
+[Desktop Entry]
+Type=Application
+Name=Illumina Portal
+Comment=Illumina operator control panel
+Exec=$CHROME_BIN_SAFE --app=$PORTAL_URL
+Icon=google-chrome
+Terminal=false
+Categories=Utility;
+EOF
+chmod 644 /usr/share/applications/illumina-portal.desktop
 
-# 2. The Backend Restart Shortcut (Shows the friendly zenity pop-up)
-create_desktop_file "$DESKTOP_DIR/restart-illumina.desktop" "Restart Illumina Backend" "$INSTALL_DIR/start-backend.sh"
+# Pin it to the taskbar right away when the account's session is available...
+USER_UID=$(id -u "$HUMAN_USER")
+if [ -S "/run/user/$USER_UID/bus" ]; then
+    sudo -u "$HUMAN_USER" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$USER_UID/bus" \
+        bash "$INSTALL_DIR/pin-taskbar.sh" 2>/dev/null || true
+fi
+# ...and guarantee the pin at the account's next login (self-removing).
+cat <<EOF > "$AUTOSTART_DIR/illumina-pin-taskbar.desktop"
+[Desktop Entry]
+Type=Application
+Name=Pin Illumina Portal to Taskbar
+Exec=bash -c "$INSTALL_DIR/pin-taskbar.sh; rm -f \"\$HOME/.config/autostart/illumina-pin-taskbar.desktop\""
+Terminal=false
+EOF
+chown "$HUMAN_USER:$HUMAN_USER" "$AUTOSTART_DIR/illumina-pin-taskbar.desktop"
+
+# 2. The Backend Restart Shortcut (Shows the friendly zenity pop-up). The
+# cautionary name keeps volunteers from clicking it casually - it is the
+# recovery path only, never the everyday launch.
+create_desktop_file "$DESKTOP_DIR/restart-illumina.desktop" "⚠ Restart Illumina (only if frozen)" "$INSTALL_DIR/start-backend.sh"
 
 # 3. The Auto-Start Shortcut (Runs silently on every login - auto SIGN-IN only
 # controls whether a password is needed, never whether the backend starts)
 create_desktop_file "$AUTOSTART_DIR/illumina-backend.desktop" "Illumina Backend" "$INSTALL_DIR/start-backend.sh --silent"
-echo "  Shortcuts placed for $HUMAN_USER - 'Illumina Portal' (everyday) and 'Restart Illumina Backend' (recovery)."
+echo "  'Illumina Portal' is pinned to the taskbar for $HUMAN_USER; the emergency restart stays on the desktop, clearly marked."
 
 echo -e "\n==> [9/9] Opening the network doors and keeping the PC awake..."
 # The portal binds HTTPS to localhost only, so no inbound 443 rule is needed
@@ -499,10 +621,10 @@ echo "   - Check for Updates : one-tap software and hymn/Bible library updates"
 echo ""
 echo "  Congratulations! You are all set! Here is how to start your first session:"
 echo ""
-echo "   1. RESTART this PC (or click 'Restart Illumina Backend'"
+echo "   1. RESTART this PC (or click '⚠ Restart Illumina (only if frozen)'"
 echo "      on the desktop). This starts the engine in the background."
 echo ""
-echo "   2. Click the 'Illumina Portal' shortcut on the desktop."
+echo "   2. Click the 'Illumina Portal' icon on the taskbar."
 echo "      The control panel will open, and your displays will wake up!"
 echo ""
 echo "  From now on, the backend starts automatically every time the PC"

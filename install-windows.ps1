@@ -592,6 +592,7 @@ foreach ($spot in $spots) {
     if (Test-Path $spot) {
         Get-ChildItem $spot -Filter "Illumina*.lnk" -ErrorAction SilentlyContinue | Remove-Item -Force
         Get-ChildItem $spot -Filter "Restart*.lnk"  -ErrorAction SilentlyContinue | Remove-Item -Force
+        Get-ChildItem $spot -Filter "⚠*.lnk"        -ErrorAction SilentlyContinue | Remove-Item -Force
     }
 }
 
@@ -605,8 +606,10 @@ $portal.Arguments    = "--app=$PortalUrl"
 $portal.IconLocation = "$ChromeExe,0"
 $portal.Save()
 
-# 2. The Backend Restart Shortcut (Shows the friendly pop-up)
-$restart = $Wsh.CreateShortcut("$UserDesktop\Restart Illumina Backend.lnk")
+# 2. The Backend Restart Shortcut (Shows the friendly pop-up). The cautionary
+# name keeps volunteers from clicking it casually - it is the recovery path
+# only, never the everyday launch.
+$restart = $Wsh.CreateShortcut("$UserDesktop\⚠ Restart Illumina (only if frozen).lnk")
 $restart.TargetPath   = $PsExe
 $restart.Arguments    = "-ExecutionPolicy Bypass -WindowStyle Hidden -File `"$InstallDir\start-backend.ps1`""
 $restart.IconLocation = "shell32.dll,238" # Refresh/Restart icon
@@ -618,7 +621,7 @@ $autoStart.TargetPath = $PsExe
 $autoStart.Arguments  = "-ExecutionPolicy Bypass -WindowStyle Hidden -File `"$InstallDir\start-backend.ps1`" -Silent"
 $autoStart.Save()
 
-Log "Shortcuts placed for $HumanUser - 'Illumina Portal' (everyday) and 'Restart Illumina Backend' (recovery)."
+Log "Shortcuts placed for $HumanUser - 'Illumina Portal' (everyday) and '⚠ Restart Illumina (only if frozen)' (recovery)."
 
 # ---------------- [9/9] Network, power, summary -----------------------------
 Log "[9/9] Opening the network doors and keeping the PC awake..."
@@ -651,7 +654,7 @@ Write-Host "   - Check for Updates : one-tap software and hymn/Bible library upd
 Write-Host ""
 Write-Host "  Congratulations! You are all set! Here is how to start your first session:" -ForegroundColor Yellow
 Write-Host ""
-Write-Host "   1. RESTART this PC (or double-click 'Restart Illumina Backend'" -ForegroundColor White
+Write-Host "   1. RESTART this PC (or double-click '⚠ Restart Illumina (only if frozen)'" -ForegroundColor White
 Write-Host "      on the desktop). This starts the engine in the background." -ForegroundColor White
 Write-Host ""
 Write-Host "   2. Double-click the 'Illumina Portal' shortcut on the desktop." -ForegroundColor White
