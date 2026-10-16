@@ -58,7 +58,6 @@ if [ "$INTERACTIVE_USER" = "root" ]; then
     echo "  rather than switching to root directly, so shortcuts land in the right profile."
     exit 1
 fi
-USER_HOME=$(eval echo "~$INTERACTIVE_USER")
 INSTALL_DIR="/opt/illumina"
 MACHINE_DIR="/var/lib/illumina"
 PORTAL_URL="https://localhost"
@@ -365,6 +364,17 @@ read -p "  [1/4] Do you have a RIGHT Display (in addition to the Left Display)? 
 read -p "  [2/4] Retrieve Prayer/Announcement slides from Google Drive? [y/N] (ENTER = No): " SYNC
 RIGHT_ON=false;  [[ "$R_WALL" =~ ^[yY]$ ]] && RIGHT_ON=true
 SYNC_ON=false;   [[ "$SYNC"   =~ ^[yY]$ ]] && SYNC_ON=true
+# The folder IDs belong to question 2 - ask them immediately while the
+# operator still has the Drive browser tab open, not three questions later.
+PRAYER_ID=""; ANN_ID=""
+if [ "$SYNC_ON" = true ]; then
+    read -p "       Prayer slides folder ID (Google Drive): " PRAYER_ID
+    read -p "       Announcements slides folder ID (Google Drive): " ANN_ID
+    if [ -z "$PRAYER_ID" ] || [ -z "$ANN_ID" ]; then
+        SYNC_ON=false
+        echo "  A folder ID was left empty, so Drive sync stays OFF."
+    fi
+fi
 
 # Display languages. On a re-install the machine's existing choices become
 # the defaults (ENTER keeps them); fresh installs default to English primary
@@ -401,7 +411,7 @@ done
 PRIMARY_LANG=${LANG_CODES[$PRIMARY_IDX]}; SECONDARY_LANG=${LANG_CODES[$SECONDARY_IDX]}
 echo "  Languages: ${LANG_NAMES[$PRIMARY_IDX]} (primary) + ${LANG_NAMES[$SECONDARY_IDX]} (secondary)"
 
-KEY_JSON="$MACHINE_DIR/key.json"; PRAYER_ID=""; ANN_ID=""
+KEY_JSON="$MACHINE_DIR/key.json"
 if [ "$SYNC_ON" = true ]; then
     if [ ! -f "$KEY_JSON" ]; then
         echo "  Fetching the Drive key from the private repository..."
@@ -410,9 +420,6 @@ if [ "$SYNC_ON" = true ]; then
     fi
     if [ -f "$KEY_JSON" ]; then
         chown "$HUMAN_USER:$HUMAN_USER" "$KEY_JSON"; chmod 400 "$KEY_JSON"
-        read -p "  Prayer slides folder ID (Google Drive): " PRAYER_ID
-        read -p "  Announcements slides folder ID (Google Drive): " ANN_ID
-        if [ -z "$PRAYER_ID" ] || [ -z "$ANN_ID" ]; then SYNC_ON=false; echo "  A folder ID was left empty, so Drive sync stays OFF."; fi
     else
         SYNC_ON=false; echo "  No Drive key available, so Drive sync stays OFF."
     fi
@@ -563,8 +570,12 @@ gsettings set org.gnome.shell favorite-apps "$NEW" 2>/dev/null || true
 EOF
 chmod +x "$INSTALL_DIR/pin-taskbar.sh"
 
-DESKTOP_DIR="$USER_HOME/Desktop"
-AUTOSTART_DIR="$USER_HOME/.config/autostart"
+# Shortcuts belong to the RUNTIME account's home, not the sudo caller's:
+# with a dedicated avauser, writing into the caller's home as avauser fails
+# ("mkdir: Permission denied" - observed on the first real install).
+HUMAN_HOME=$(eval echo "~$HUMAN_USER")
+DESKTOP_DIR="$HUMAN_HOME/Desktop"
+AUTOSTART_DIR="$HUMAN_HOME/.config/autostart"
 sudo -u "$HUMAN_USER" mkdir -p "$DESKTOP_DIR" "$AUTOSTART_DIR"
 
 create_desktop_file() {
