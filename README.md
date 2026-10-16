@@ -4,6 +4,8 @@ Welcome, and thank you for helping your church bring **Illumina** to life. Illum
 
 This guide turns a standard Windows or Ubuntu PC into a dedicated, self-healing Illumina kiosk in just a few minutes. No IT background needed: the installer asks a handful of friendly questions (ENTER accepts the safe default every time) and handles everything else — certificates, dependencies, displays, and firewall — quietly and correctly.
 
+![Alt Architecture](./docs/architecture.png)
+
 ---
 
 ## ✨ What awaits you
