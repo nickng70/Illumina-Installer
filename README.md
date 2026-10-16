@@ -1,26 +1,26 @@
 # Illumina AVA PC Deployment Guide
 
-Welcome, and thank you for helping your church bring **Illumina** to life. Illumina is a professional church presentation platform — the operational hub for services, media, streaming, recording, and archives — built with love for True Jesus Church congregations around the world.
+Welcome, and thank you for helping your church bring **Illumina** to life. Illumina is built for True Jesus Church as the next generation of TJC Church Presenter, serving as a single operational hub for services, media, streaming, recording, and archives.
 
-This guide turns a standard Windows or Ubuntu PC into a dedicated, self-healing Illumina kiosk in just a few minutes. No IT background needed: the installer asks a handful of friendly questions (ENTER accepts the safe default every time) and handles everything else — certificates, dependencies, displays, and firewall — quietly and correctly.
-
-![Alt Architecture](./docs/architecture.png)
+This guide will turn a standard Windows or Ubuntu PC into a dedicated, self-healing Illumina kiosk in just a few minutes. No IT background is needed. The installer asks a handful of simple questions, and pressing ENTER always accepts the safe default. It then takes care of everything else, including certificates, dependencies, displays, and firewall settings, quietly and reliably.
 
 ---
 
 ## ✨ What awaits you
 
-* **Displays that follow the operator.** Open the portal and every screen wakes into position; close it and the room sleeps gracefully. A window that crashes relaunches itself within seconds — before anyone even notices.
-* **First-run display auto-detect.** The very first launch maps your monitors onto the display roles automatically. Plug in a projector, and Illumina finds its place.
-* **Congregation QR that never goes stale.** Members scan once and follow along on their phones. The address is auto-detected live from the AVA PC, so a router change never breaks it.
-* **One-tap updates, right in the app.** *Menu → Check for Updates* brings new features, hymns, and Bible text to every AVA PC — the library updates without even a restart.
-* **Broadcast-grade streaming.** YouTube and Twitch with a scene-based production deck, PTZ camera control, and an overflow-hall feed — all from the same calm interface.
+* **Displays that follow the operator.** Open the portal and every screen comes to life in position; close it and the room settles quietly to rest. If a window ever crashes, it relaunches itself within seconds, often before anyone notices.
+* **Automatic display detection on first run.** The first time Illumina launches, it maps your monitors to the correct display roles for you. Connect a projector, and Illumina finds its place.
+* **A congregation QR code that never goes stale.** Members scan it once and can follow along on their phones. The address is detected live from the AVA PC, so changing your router will never break the link.
+* **One-tap updates, right in the app.** *Menu → Check for Updates* brings new features, hymns, and Bible text to every AVA PC. The library updates without needing a restart.
+* **Broadcast-grade streaming.** Stream to YouTube and Twitch with a scene-based production deck, PTZ camera control, and an overflow-hall feed, all from one calm, familiar interface.
 
 ---
 
 ## 🔌 Hardware & Network Planning
 
 Illumina is the central hub of your live production environment, coordinating displays, cameras, and smart infrastructure over the local network. A little planning up front makes setup effortless.
+
+![Alt Architecture](./docs/architecture.png)
 
 ### Display Outputs
 * **Left & Right Displays:** The congregation-facing main outputs. LED video walls, laser projectors, and large-format LCD panels are all first-class citizens.
