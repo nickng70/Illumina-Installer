@@ -350,8 +350,11 @@ echo "$TAG_NAME" > "$MACHINE_DIR/current-version"
 echo "  Running a quick launch check to prove the engine starts cleanly..."
 SMOKE_PORT=5599
 SMOKE_LOG=/tmp/illumina-launch-check.log
-ASPNETCORE_ENVIRONMENT=Development ASPNETCORE_URLS="http://127.0.0.1:$SMOKE_PORT" \
-    "$INSTALL_DIR/Illumina" > "$SMOKE_LOG" 2>&1 &
+# Launched from the install dir on purpose: ASP.NET Core's content root is
+# the current working directory, and the app crashes at startup without its
+# wwwroot/Data folders beside it.
+(cd "$INSTALL_DIR" && ASPNETCORE_ENVIRONMENT=Development ASPNETCORE_URLS="http://127.0.0.1:$SMOKE_PORT" \
+    ./Illumina > "$SMOKE_LOG" 2>&1) &
 SMOKE_PID=$!
 SMOKE_OK=false
 for i in $(seq 1 30); do
@@ -514,6 +517,11 @@ CHROME_BIN_SAFE=${CHROME_BIN:-/usr/bin/google-chrome}
 # volunteer that the engine is ready and they can now open the portal.
 cat <<EOF > "$INSTALL_DIR/start-backend.sh"
 #!/bin/bash
+# Content root = current working directory for ASP.NET Core, so the app must
+# be launched FROM its own folder - otherwise wwwroot/Data aren't found and
+# the process crashes inside MediaLibraryService (observed on first Ubuntu
+# install). cd to this script's home before anything else.
+cd "\$(dirname "\$0")" || exit 1
 APP="$INSTALL_DIR/Illumina"
 pkill -f "\$APP" || true
 sleep 1
@@ -646,6 +654,12 @@ echo ""
 echo "  From now on, the backend starts automatically every time the PC"
 echo "  boots. You only ever need to click the 'Illumina Portal' icon."
 echo ""
+if [ "$USE_AVA_USER" = true ]; then
+    echo "  Maintenance note: '$HUMAN_USER' has no administrator rights by design"
+    echo "  (that is what makes the kiosk safe). To re-run this installer or do"
+    echo "  system maintenance later, sign in as $INTERACTIVE_USER instead."
+    echo ""
+fi
 if [ "$AUTO_LOGIN_ON" = true ]; then
     read -p "  Would you like to restart now to finish setup? [y/N] (ENTER = No): " ANS
     if [[ "$ANS" =~ ^[yY]$ ]]; then reboot; fi

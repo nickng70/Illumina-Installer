@@ -106,6 +106,8 @@ sudo apt-get update && sudo apt-get install -y curl && curl -sSL https://raw.git
 ### Step 4: You're Live
 Illumina is installed and running immediately. If you chose Auto Sign-In, an optional reboot activates the automated login sequence for future power cycles.
 
+> *Re-running the installer later (e.g. for a manual update)? Sign in as your administrator account first (e.g. `avaadmin`) — the dedicated `avauser` account intentionally has no sudo rights, so the installer's `sudo` steps will politely refuse.*
+
 ---
 
 ## 🧠 Presence-Driven Behavior (What Volunteers Will See)
