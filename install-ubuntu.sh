@@ -300,6 +300,10 @@ fi
 rm -rf "$INSTALL_DIR"; mkdir -p "$INSTALL_DIR"
 cp -a "$STAGE/." "$INSTALL_DIR/"
 rm -rf "$STAGE"
+# cp -a of a mktemp dir's "/." also copies the staging dir's own 0700 mode
+# onto the install dir, locking the kiosk account out entirely ("cd:
+# /opt/illumina: Permission denied" - observed on the first real install).
+chmod 755 "$INSTALL_DIR"
 # A zip built on Windows carries no Unix exec bits - restore them (harmless if
 # the package already stamped them via entry attributes).
 chmod +x "$INSTALL_DIR/Illumina" 2>/dev/null || true
