@@ -139,7 +139,7 @@ Both run the same `start-backend` script: stop any stale backend, start a fresh 
 | Shortcut | Purpose | System Behavior |
 | :--- | :--- | :--- |
 | **Illumina Portal** | **Standard Launch** | Opens the operator portal. Completely non-destructive; safe to click at any time, even during a live broadcast. Pinned to the **taskbar** on Ubuntu (pinned automatically at first login); a **desktop** shortcut on Windows. |
-| **⚠ Restart Illumina (only if frozen)** | **Emergency Recovery** | Force-closes the backend and kiosk display windows, then performs a clean launch. *Warning: this ends any active broadcast or recording — the cautionary name is deliberate, so volunteers never mistake it for the everyday launch.* |
+| **Restart Illumina (only if frozen)** | **Emergency Recovery** | Force-closes the backend and kiosk display windows, then performs a clean launch. *Warning: this ends any active broadcast or recording — the cautionary name is deliberate, so volunteers never mistake it for the everyday launch.* |
 
 ---
 

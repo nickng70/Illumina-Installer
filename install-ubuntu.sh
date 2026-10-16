@@ -309,9 +309,25 @@ for ITEM in AppData MediaContent SlideContent Recordings; do
     fi
 done
 if [ -d "$PRESERVE/Data/Localization" ]; then
-    rm -rf "$INSTALL_DIR/Data/Localization"
-    mkdir -p "$INSTALL_DIR/Data"
-    mv "$PRESERVE/Data/Localization" "$INSTALL_DIR/Data/Localization"
+    # Per-key merge, NOT a wholesale restore: a release may add UI strings,
+    # and a wholesale restore strands the UI on "[key]" placeholders for
+    # every new feature (observed at v0.4). The new build's file is the base;
+    # the church's customized values win key-by-key. Array files
+    # (PresetTitles/EventTitles) and unparsable files take the church's copy.
+    while IFS= read -r P_FILE; do
+        REL="${P_FILE#"$PRESERVE"/Data/Localization/}"
+        DEST="$INSTALL_DIR/Data/Localization/$REL"
+        mkdir -p "$(dirname "$DEST")"
+        if [ -f "$DEST" ] \
+            && [ "$(jq -r 'type' "$DEST" 2>/dev/null)" = "object" ] \
+            && [ "$(jq -r 'type' "$P_FILE" 2>/dev/null)" = "object" ] \
+            && jq -s '.[0] * .[1]' "$DEST" "$P_FILE" > "$DEST.merged" 2>/dev/null; then
+            mv "$DEST.merged" "$DEST"
+        else
+            rm -f "$DEST.merged"
+            cp "$P_FILE" "$DEST"
+        fi
+    done < <(find "$PRESERVE/Data/Localization" -type f -name '*.json')
 fi
 rm -rf "$PRESERVE"
 mkdir -p "$INSTALL_DIR/Data"
@@ -586,7 +602,7 @@ chown "$HUMAN_USER:$HUMAN_USER" "$AUTOSTART_DIR/illumina-pin-taskbar.desktop"
 # 2. The Backend Restart Shortcut (Shows the friendly zenity pop-up). The
 # cautionary name keeps volunteers from clicking it casually - it is the
 # recovery path only, never the everyday launch.
-create_desktop_file "$DESKTOP_DIR/restart-illumina.desktop" "⚠ Restart Illumina (only if frozen)" "$INSTALL_DIR/start-backend.sh"
+create_desktop_file "$DESKTOP_DIR/restart-illumina.desktop" "Restart Illumina (only if frozen)" "$INSTALL_DIR/start-backend.sh"
 
 # 3. The Auto-Start Shortcut (Runs silently on every login - auto SIGN-IN only
 # controls whether a password is needed, never whether the backend starts)
@@ -621,7 +637,7 @@ echo "   - Check for Updates : one-tap software and hymn/Bible library updates"
 echo ""
 echo "  Congratulations! You are all set! Here is how to start your first session:"
 echo ""
-echo "   1. RESTART this PC (or click '⚠ Restart Illumina (only if frozen)'"
+echo "   1. RESTART this PC (or click 'Restart Illumina (only if frozen)'"
 echo "      on the desktop). This starts the engine in the background."
 echo ""
 echo "   2. Click the 'Illumina Portal' icon on the taskbar."

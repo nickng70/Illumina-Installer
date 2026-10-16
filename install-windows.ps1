@@ -325,6 +325,38 @@ if (Test-Path $TokenFile) {
 Log "[6/9] Installing Illumina and preparing its content folders..."
 Show-Tip
 
+# Merges a preserved localization file into the newly-installed copy (see the
+# restore step below for the why). Church customizations win per key; strings
+# newly added by a release survive.
+function Merge-PreservedJson([string]$ShippedPath, [string]$PreservedPath) {
+    if (-not (Test-Path $PreservedPath)) { return }
+    if (-not (Test-Path $ShippedPath)) {
+        New-Item -ItemType Directory -Path (Split-Path $ShippedPath) -Force | Out-Null
+        Copy-Item $PreservedPath $ShippedPath -Force
+        return
+    }
+    $shipped   = Get-Content $ShippedPath   -Raw -Encoding UTF8
+    $preserved = Get-Content $PreservedPath -Raw -Encoding UTF8
+    try {
+        # Decide object-vs-array from the raw TEXT, never from ConvertFrom-
+        # Json's return type: PS 5.1 unrolls JSON arrays into the pipeline
+        # (a 1-element array becomes a scalar), which silently corrupts the
+        # merged file.
+        if ($shipped.TrimStart().StartsWith('{') -and $preserved.TrimStart().StartsWith('{')) {
+            $shippedObj   = $shipped   | ConvertFrom-Json
+            $preservedObj = $preserved | ConvertFrom-Json
+            foreach ($prop in $preservedObj.PSObject.Properties) {
+                $shippedObj | Add-Member -NotePropertyName $prop.Name -NotePropertyValue $prop.Value -Force
+            }
+            ($shippedObj | ConvertTo-Json -Depth 20) | Set-Content $ShippedPath -Encoding UTF8
+        } else {
+            Copy-Item $PreservedPath $ShippedPath -Force
+        }
+    } catch {
+        Copy-Item $PreservedPath $ShippedPath -Force
+    }
+}
+
 # Move the machine's state aside before wiping, restore it after the new
 # build lands. AppData holds every machine setting + secret (overrides,
 # operator form, kiosk geometry); MediaContent/SlideContent/Recordings are
@@ -354,9 +386,15 @@ foreach ($item in @("AppData", "MediaContent", "SlideContent", "Recordings")) {
     }
 }
 if (Test-Path "$Preserve\Data\Localization") {
-    if (Test-Path "$InstallDir\Data\Localization") { Remove-Item "$InstallDir\Data\Localization" -Recurse -Force }
-    New-Item -ItemType Directory -Path "$InstallDir\Data" -Force | Out-Null
-    Move-Item "$Preserve\Data\Localization" "$InstallDir\Data\Localization" -Force
+    # Per-key merge, NOT a wholesale restore: a release may add UI strings,
+    # and a wholesale restore would strand the UI on "[key]" placeholders for
+    # every new feature (observed at v0.4). The new build's file is the base;
+    # the church's customized values win key-by-key. Array files
+    # (PresetTitles/EventTitles) and unparsable files take the church's copy.
+    Get-ChildItem "$Preserve\Data\Localization" -Recurse -Filter *.json | ForEach-Object {
+        $rel = $_.FullName.Substring((Join-Path $Preserve "Data\Localization").Length + 1)
+        Merge-PreservedJson (Join-Path "$InstallDir\Data\Localization" $rel) $_.FullName
+    }
 }
 Remove-Item $Preserve -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Path "$InstallDir\Data" -Force | Out-Null
@@ -608,8 +646,9 @@ $portal.Save()
 
 # 2. The Backend Restart Shortcut (Shows the friendly pop-up). The cautionary
 # name keeps volunteers from clicking it casually - it is the recovery path
-# only, never the everyday launch.
-$restart = $Wsh.CreateShortcut("$UserDesktop\⚠ Restart Illumina (only if frozen).lnk")
+# only, never the everyday launch. (No ⚠ emoji: PowerShell 5.1 reads this
+# BOM-less script as ANSI and mojibakes it - observed on a real install.)
+$restart = $Wsh.CreateShortcut("$UserDesktop\Restart Illumina (only if frozen).lnk")
 $restart.TargetPath   = $PsExe
 $restart.Arguments    = "-ExecutionPolicy Bypass -WindowStyle Hidden -File `"$InstallDir\start-backend.ps1`""
 $restart.IconLocation = "shell32.dll,238" # Refresh/Restart icon
@@ -621,7 +660,7 @@ $autoStart.TargetPath = $PsExe
 $autoStart.Arguments  = "-ExecutionPolicy Bypass -WindowStyle Hidden -File `"$InstallDir\start-backend.ps1`" -Silent"
 $autoStart.Save()
 
-Log "Shortcuts placed for $HumanUser - 'Illumina Portal' (everyday) and '⚠ Restart Illumina (only if frozen)' (recovery)."
+Log "Shortcuts placed for $HumanUser - 'Illumina Portal' (everyday) and 'Restart Illumina (only if frozen)' (recovery)."
 
 # ---------------- [9/9] Network, power, summary -----------------------------
 Log "[9/9] Opening the network doors and keeping the PC awake..."
@@ -654,7 +693,7 @@ Write-Host "   - Check for Updates : one-tap software and hymn/Bible library upd
 Write-Host ""
 Write-Host "  Congratulations! You are all set! Here is how to start your first session:" -ForegroundColor Yellow
 Write-Host ""
-Write-Host "   1. RESTART this PC (or double-click '⚠ Restart Illumina (only if frozen)'" -ForegroundColor White
+Write-Host "   1. RESTART this PC (or double-click 'Restart Illumina (only if frozen)'" -ForegroundColor White
 Write-Host "      on the desktop). This starts the engine in the background." -ForegroundColor White
 Write-Host ""
 Write-Host "   2. Double-click the 'Illumina Portal' shortcut on the desktop." -ForegroundColor White
