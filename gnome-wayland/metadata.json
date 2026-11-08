@@ -4,6 +4,6 @@
   "description": "Places Illumina's own Chrome kiosk windows and reports monitor geometry on GNOME/Wayland.",
   "shell-version": ["42", "43", "44", "45", "46", "47", "48", "49", "50"],
   "session-modes": ["user"],
-  "version": 1,
+  "version": 2,
   "url": "https://github.com/nickng70/Illumina-Installer"
 }

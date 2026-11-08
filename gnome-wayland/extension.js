@@ -16,6 +16,9 @@ const INTERFACE_XML = `
     <method name="GetDisplays">
       <arg type="s" direction="out"/>
     </method>
+    <method name="GetLastError">
+      <arg type="s" direction="out"/>
+    </method>
     <method name="MoveWindow">
       <arg type="s" direction="in" name="title"/>
       <arg type="b" direction="in" name="prefixMatch"/>
@@ -31,6 +34,7 @@ const INTERFACE_XML = `
 
 export default class IlluminaWindowManagerExtension extends Extension {
     enable() {
+        this._lastError = '';
         this._exported = Gio.DBusExportedObject.wrapJSObject(INTERFACE_XML, this);
         this._exported.export(Gio.DBus.session, OBJECT_PATH);
         this._ownerId = Gio.bus_own_name_on_connection(
@@ -54,6 +58,10 @@ export default class IlluminaWindowManagerExtension extends Extension {
 
     GetProtocolVersion() {
         return PROTOCOL_VERSION;
+    }
+
+    GetLastError() {
+        return GLib.base64_encode(new TextEncoder().encode(this._lastError || ''));
     }
 
     GetDisplays() {
@@ -83,8 +91,11 @@ export default class IlluminaWindowManagerExtension extends Extension {
     }
 
     MoveWindow(title, prefixMatch, x, y, width, height, tolerancePx) {
-        if (!this._validRequest(title, x, y, width, height, tolerancePx))
+        this._lastError = '';
+        if (!this._validRequest(title, x, y, width, height, tolerancePx)) {
+            this._lastError = `Invalid request: ${title} ${x},${y} ${width}x${height}, tolerance ${tolerancePx}`;
             return 2;
+        }
 
         try {
             const window = this._findWindow(title, prefixMatch);
@@ -95,8 +106,10 @@ export default class IlluminaWindowManagerExtension extends Extension {
 
             if (window.is_fullscreen()) {
                 const monitor = this._monitorForRect(x, y, width, height);
-                if (monitor < 0)
+                if (monitor < 0) {
+                    this._lastError = `No monitor contains target ${x},${y} ${width}x${height}`;
                     return 2;
+                }
                 window.move_to_monitor(monitor);
                 return 0;
             }
@@ -110,11 +123,13 @@ export default class IlluminaWindowManagerExtension extends Extension {
             if (tolerancePx >= 0 && !deviates && !maximized)
                 return 0;
 
-            if (maximized)
-                window.unmaximize(Meta.MaximizeFlags.BOTH);
+            if (maximized) {
+                window.unmaximize(Meta.MaximizeFlags.HORIZONTAL | Meta.MaximizeFlags.VERTICAL);
+            }
             window.move_resize_frame(false, x, y, width, height);
             return 0;
         } catch (error) {
+            this._lastError = `${error.message}\n${error.stack || ''}`;
             logError(error, 'Illumina MoveWindow');
             return 2;
         }
@@ -139,9 +154,15 @@ export default class IlluminaWindowManagerExtension extends Extension {
             if (!window)
                 continue;
 
-            const windowClass = [window.get_wm_class(), window.get_wm_class_instance()]
-                .filter(value => !!value)
-                .join('.');
+            const classParts = [];
+            for (const method of ['get_wm_class', 'get_wm_class_instance']) {
+                if (typeof window[method] === 'function') {
+                    const value = window[method]();
+                    if (value)
+                        classParts.push(value);
+                }
+            }
+            const windowClass = classParts.join('.');
             if (!/chrome|chromium/i.test(windowClass))
                 continue;
 
