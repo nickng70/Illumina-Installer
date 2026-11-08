@@ -106,6 +106,8 @@ sudo apt-get update && sudo apt-get install -y curl && curl -sSL https://raw.git
 ### Step 4: Restart Once, Then You're Live
 Illumina is installed and running immediately. On Ubuntu 26.04 (or an earlier Ubuntu running GNOME/Wayland), accept the installer's restart prompt before opening the portal: GNOME Shell must load Illumina's native window-management helper once so every kiosk window can land on its assigned monitor. Earlier X11 installations only need the optional Auto Sign-In restart. When upgrading from the earlier unsupported Wayland attempt, the installer also clears stale pseudo-screen window geometry once and keeps a backup beside the settings file; all display enable flags and unrelated settings are preserved.
 
+New Ubuntu installations start with **CG and Broadcast Encoder disabled**; enable them later in **Menu → Settings → Displays** when your streaming hardware is ready. The Right Display still follows your installer survey answer. On the dedicated auto-login AVA account, the portal uses Chrome's basic password store because GNOME cannot unlock its login keyring without a password prompt—do not save unrelated website passwords in that Chrome profile. Ubuntu uninstall/reinstall preserves support logs under `/var/lib/illumina/support-logs`; the app continues its normal 14-day retention.
+
 > *Re-running the installer later (e.g. for a manual update)? Sign in as your administrator account first (e.g. `avaadmin`) — the dedicated `avauser` account intentionally has no sudo rights, so the installer's `sudo` steps will politely refuse.*
 
 ---

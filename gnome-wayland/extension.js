@@ -119,7 +119,7 @@ export default class IlluminaWindowManagerExtension extends Extension {
                 || Math.abs(rect.y - y) > Math.max(0, tolerancePx)
                 || Math.abs(rect.width - width) > Math.max(0, tolerancePx)
                 || Math.abs(rect.height - height) > Math.max(0, tolerancePx);
-            const maximized = window.get_maximized() !== 0;
+            const maximized = window.maximized_horizontally || window.maximized_vertically;
             if (tolerancePx >= 0 && !deviates && !maximized)
                 return 0;
 

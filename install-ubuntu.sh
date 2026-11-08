@@ -500,6 +500,11 @@ echo "  Certificate created, trusted system-wide and in Chrome, and ready for Ke
 # (Detection code removed - virtual adapters like docker0 can never win now.)
 
 mkdir -p "$INSTALL_DIR/AppData"
+if [ -d "$MACHINE_DIR/support-logs" ]; then
+    mkdir -p "$INSTALL_DIR/AppData/logs"
+    cp -an "$MACHINE_DIR/support-logs/." "$INSTALL_DIR/AppData/logs/"
+    chown -R "$HUMAN_USER:$HUMAN_USER" "$INSTALL_DIR/AppData/logs"
+fi
 [ -f "$OVERRIDES" ] || echo '{}' > "$OVERRIDES"
 
 # The pre-native Wayland build could persist XWayland pseudo-screen geometry.
@@ -528,7 +533,8 @@ jq \
     .Urls = "https://localhost;http://0.0.0.0:80"
     | .Kestrel = { Certificates: { Default: { Path: $pfx, Password: $pfxpass } } }
     | .Kiosk = ((.Kiosk // {}) + { BaseUrl: "https://localhost", Enabled: true,
-                                   RightWallEnabled: $right })
+                                   RightWallEnabled: $right,
+                                   CgEnabled: false, ProgramEnabled: false })
     | .Localization = ((.Localization // {}) + { PrimaryLanguage: $plang, SelectedSecondaryLanguage: $slang })
     | .SlideLibrary = ((.SlideLibrary // {}) + {
         LibreOfficePath: $soffice,
@@ -681,18 +687,25 @@ rm -f "$DESKTOP_DIR"/illumina*.desktop "$DESKTOP_DIR"/restart*.desktop "$AUTOSTA
 # 1. The Portal Launcher lives in the system application menu so the taskbar
 # (GNOME dash) can find and pin it, AND on the desktop as a familiar
 # double-click icon - both point at the same portal.
+# Auto sign-in cannot unlock GNOME's login keyring. On the DEDICATED account
+# only, use Chrome's basic store so the portal never blocks on that prompt.
+# Do not save unrelated website passwords in the AVA PC's Chrome profile.
+PORTAL_CHROME_FLAGS=""
+if [ "$USE_AVA_USER" = true ] && [ "$AUTO_LOGIN_ON" = true ]; then
+    PORTAL_CHROME_FLAGS="--password-store=basic"
+fi
 cat <<EOF > /usr/share/applications/illumina-portal.desktop
 [Desktop Entry]
 Type=Application
 Name=Illumina Portal
 Comment=Illumina operator control panel
-Exec=$CHROME_BIN_SAFE --app=$PORTAL_URL
+Exec=$CHROME_BIN_SAFE $PORTAL_CHROME_FLAGS --app=$PORTAL_URL
 Icon=$INSTALL_DIR/wwwroot/icon-256.png
 Terminal=false
 Categories=Utility;
 EOF
 chmod 644 /usr/share/applications/illumina-portal.desktop
-create_desktop_file "$DESKTOP_DIR/illumina-portal.desktop" "Illumina Portal" "$CHROME_BIN_SAFE --app=$PORTAL_URL" "$INSTALL_DIR/wwwroot/icon-256.png"
+create_desktop_file "$DESKTOP_DIR/illumina-portal.desktop" "Illumina Portal" "$CHROME_BIN_SAFE $PORTAL_CHROME_FLAGS --app=$PORTAL_URL" "$INSTALL_DIR/wwwroot/icon-256.png"
 
 # Pin it to the taskbar right away when the account's session is available...
 USER_UID=$(id -u "$HUMAN_USER")
