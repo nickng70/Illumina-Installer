@@ -103,8 +103,8 @@ sudo apt-get update && sudo apt-get install -y curl && curl -sSL https://raw.git
 * **Environment Profile:** A dedicated `avauser` or your current account.
 * **Hardware & Language Survey:** Right Display, Google Drive sync, and your primary + secondary display languages — that's all. Streaming, Home Assistant, and Novastar live in **Menu → Settings** for when your hardware arrives (plus the same rotating tips while the downloads run).
 
-### Step 4: You're Live
-Illumina is installed and running immediately. If you chose Auto Sign-In, an optional reboot activates the automated login sequence for future power cycles.
+### Step 4: Restart Once, Then You're Live
+Illumina is installed and running immediately. On Ubuntu 26.04 (or an earlier Ubuntu running GNOME/Wayland), accept the installer's restart prompt before opening the portal: GNOME Shell must load Illumina's native window-management helper once so every kiosk window can land on its assigned monitor. Earlier X11 installations only need the optional Auto Sign-In restart. When upgrading from the earlier unsupported Wayland attempt, the installer also clears stale pseudo-screen window geometry once and keeps a backup beside the settings file; all display enable flags and unrelated settings are preserved.
 
 > *Re-running the installer later (e.g. for a manual update)? Sign in as your administrator account first (e.g. `avaadmin`) — the dedicated `avauser` account intentionally has no sudo rights, so the installer's `sudo` steps will politely refuse.*
 

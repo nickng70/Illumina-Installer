@@ -1,6 +1,6 @@
 #!/bin/bash
 # ==============================================================================
-# Illumina AVA PC Installer - Ubuntu 22.04/24.04 LTS (v1.0)
+# Illumina AVA PC Installer - Ubuntu 22.04/24.04/26.04 LTS (v1.1)
 # - Friendly sudo check; nothing changes before it passes
 # - Provisions media engines via apt: LibreOffice, FFmpeg, wmctrl, zenity,
 #   libnss3-tools (Chrome's certificate store), and Google Chrome
@@ -61,6 +61,15 @@ fi
 INSTALL_DIR="/opt/illumina"
 MACHINE_DIR="/var/lib/illumina"
 PORTAL_URL="https://localhost"
+WAYLAND_EXTENSION_UUID="illumina-window-manager@illumina.local"
+
+# Ubuntu 26.04's GNOME sessions are Wayland-only. Earlier releases use the
+# existing X11 backend unless the installer itself is running in Wayland.
+. /etc/os-release
+NATIVE_GNOME_WAYLAND=false
+if [ "${XDG_SESSION_TYPE:-}" = "wayland" ] || { [ -n "${VERSION_ID:-}" ] && dpkg --compare-versions "$VERSION_ID" ge "26.04"; }; then
+    NATIVE_GNOME_WAYLAND=true
+fi
 
 # Rotating "Did you know?" tips, shown before each long download/install so
 # the wait doubles as a tour of what Menu->Settings can do later.
@@ -89,7 +98,7 @@ show_tip() {
 }
 
 echo "=================================================="
-echo "   Illumina AVA PC Installer - Ubuntu (v1.0)      "
+echo "   Illumina AVA PC Installer - Ubuntu (v1.1)      "
 echo "   Guided setup for a safe, self-starting AVA PC  "
 echo "=================================================="
 echo ""
@@ -108,13 +117,13 @@ echo -e "\n==> [1/9] Accessing GitHub Illumina repository..."
 apt-get update -qq > /dev/null
 # Added zenity for the native Linux pop-up message box; libcap2-bin provides
 # setcap, which lets the unprivileged kiosk account bind ports 80/443.
-# x11-utils (xprop) and x11-xserver-utils (xrandr) feed the app's monitor
-# detection - the same "detect displays" flow the Windows build enjoys.
-apt-get install -y -qq curl unzip jq openssl wmctrl zenity libnss3-tools libcap2-bin x11-utils x11-xserver-utils > /dev/null
+# x11-utils (xprop) and x11-xserver-utils (xrandr) feed the X11 backend.
+# libglib2.0-bin supplies gdbus for the native GNOME/Wayland backend.
+apt-get install -y -qq curl unzip jq openssl wmctrl zenity libnss3-tools libcap2-bin x11-utils x11-xserver-utils libglib2.0-bin > /dev/null
 # curl is NOT preinstalled on a fresh Ubuntu - and neither are some of the
 # others on minimal installs. Verify the essentials actually landed rather
 # than failing mysteriously three steps later.
-for TOOL in curl unzip jq openssl; do
+for TOOL in curl unzip jq openssl gdbus; do
     if ! command -v "$TOOL" > /dev/null 2>&1; then
         echo "  ERROR: the '$TOOL' tool could not be installed. Please check this PC's"
         echo "  internet connection, run 'sudo apt update', then re-run this installer."
@@ -259,11 +268,14 @@ if [ -f "$GDM_CONF" ]; then
         ensure_gdm_conf AutomaticLoginEnable false
         echo "  Auto sign-in left OFF - the PC keeps its normal logon screen."
     fi
-    # The app positions its kiosk windows and detects monitors through
-    # wmctrl/xrandr, which only work on X11 - Wayland locks the compositor
-    # against exactly these calls. Pin the login session to X11 so window
-    # snapping and display detection behave identically on every PC.
-    ensure_gdm_conf WaylandEnable false
+    if [ "$NATIVE_GNOME_WAYLAND" = true ]; then
+        # Ubuntu 26.04 has no GNOME X11 session. Illumina's compositor helper
+        # supplies native monitor/window management on Wayland instead.
+        ensure_gdm_conf WaylandEnable true
+    else
+        # The X11 backend uses wmctrl/xrandr on earlier Ubuntu releases.
+        ensure_gdm_conf WaylandEnable false
+    fi
 fi
 
 # ----------------------------- [7/9] APP FILES & PERMISSIONS ----------------
@@ -489,6 +501,23 @@ echo "  Certificate created, trusted system-wide and in Chrome, and ready for Ke
 
 mkdir -p "$INSTALL_DIR/AppData"
 [ -f "$OVERRIDES" ] || echo '{}' > "$OVERRIDES"
+
+# The pre-native Wayland build could persist XWayland pseudo-screen geometry.
+# Clear that geometry ONCE, preserving all flags and unrelated settings, so
+# first-run detection can assign real monitors through the compositor helper.
+WAYLAND_GEOMETRY_MARKER="$MACHINE_DIR/wayland-window-manager-v1"
+if [ "$NATIVE_GNOME_WAYLAND" = true ] && [ ! -f "$WAYLAND_GEOMETRY_MARKER" ]; then
+    cp -a "$OVERRIDES" "$OVERRIDES.pre-wayland-v1.json"
+    jq 'del(.Kiosk.OperatorPortal, .Kiosk.LeftWall, .Kiosk.RightWall, .Kiosk.Cg,
+             .Kiosk.Program, .Kiosk.LeftConfidenceMonitor, .Kiosk.RightConfidenceMonitor,
+             .Kiosk.CgConfidenceMonitor, .Kiosk.ProgramConfidenceMonitor,
+             .Kiosk.TwitchConfidenceMonitor, .Kiosk.AuxHall)' \
+        "$OVERRIDES" > "$OVERRIDES.tmp" && mv "$OVERRIDES.tmp" "$OVERRIDES"
+    chown "$HUMAN_USER:$HUMAN_USER" "$OVERRIDES"
+    touch "$WAYLAND_GEOMETRY_MARKER"
+    echo "  Cleared legacy Wayland window geometry (backup: AppData/AppSettingsOverrides.pre-wayland-v1.json)."
+fi
+
 jq \
   --argjson right "$RIGHT_ON" --argjson sync "$SYNC_ON" \
   --arg plang "$PRIMARY_LANG" --arg slang "$SECONDARY_LANG" \
@@ -561,6 +590,9 @@ cat <<EOF > "$INSTALL_DIR/start-backend.sh"
 # the process crashes inside MediaLibraryService (observed on first Ubuntu
 # install). cd to this script's home before anything else.
 cd "\$(dirname "\$0")" || exit 1
+if [ "\${XDG_SESSION_TYPE:-}" = "wayland" ] && command -v gnome-extensions > /dev/null 2>&1; then
+    timeout 5s gnome-extensions enable "$WAYLAND_EXTENSION_UUID" > /dev/null 2>&1 || true
+fi
 APP="$INSTALL_DIR/Illumina"
 pkill -f "\$APP" || true
 sleep 1
@@ -611,6 +643,23 @@ HUMAN_HOME=$(eval echo "~$HUMAN_USER")
 DESKTOP_DIR="$HUMAN_HOME/Desktop"
 AUTOSTART_DIR="$HUMAN_HOME/.config/autostart"
 sudo -u "$HUMAN_USER" mkdir -p "$DESKTOP_DIR" "$AUTOSTART_DIR"
+
+if [ "$NATIVE_GNOME_WAYLAND" = true ]; then
+    echo "  Installing Illumina's native GNOME/Wayland window manager..."
+    EXTENSION_DIR="$HUMAN_HOME/.local/share/gnome-shell/extensions/$WAYLAND_EXTENSION_UUID"
+    sudo -u "$HUMAN_USER" mkdir -p "$EXTENSION_DIR"
+    for EXTENSION_FILE in extension.js metadata.json; do
+        curl -fsSL "https://raw.githubusercontent.com/nickng70/Illumina-Installer/main/gnome-wayland/$EXTENSION_FILE" \
+            -o "$EXTENSION_DIR/$EXTENSION_FILE"
+    done
+    chown -R "$HUMAN_USER:$HUMAN_USER" "$EXTENSION_DIR"
+    chmod 644 "$EXTENSION_DIR/extension.js" "$EXTENSION_DIR/metadata.json"
+    USER_UID=$(id -u "$HUMAN_USER")
+    if [ -S "/run/user/$USER_UID/bus" ]; then
+        sudo -u "$HUMAN_USER" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$USER_UID/bus" \
+            gnome-extensions enable "$WAYLAND_EXTENSION_UUID" > /dev/null 2>&1 || true
+    fi
+fi
 
 create_desktop_file() {
     local FILE_PATH=$1 NAME=$2 EXEC=$3 ICON=${4:-utilities-terminal}
@@ -720,7 +769,13 @@ fi
 # kiosk PC should never greet a volunteer with a crash dialog.
 rm -f /var/crash/*[Ii]llumina* 2>/dev/null || true
 
-if [ "$AUTO_LOGIN_ON" = true ]; then
+if [ "$NATIVE_GNOME_WAYLAND" = true ]; then
+    echo "  Native Wayland setup needs ONE full restart before opening the portal,"
+    echo "  so GNOME Shell can load Illumina's window-management helper."
+    echo ""
+fi
+
+if [ "$AUTO_LOGIN_ON" = true ] || [ "$NATIVE_GNOME_WAYLAND" = true ]; then
     read -p "  Would you like to restart now to finish setup? [y/N] (ENTER = No): " ANS
     if [[ "$ANS" =~ ^[yY]$ ]]; then
         # Plain 'reboot' is refused while another user's graphical session is

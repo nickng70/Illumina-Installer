@@ -1,6 +1,6 @@
 #!/bin/bash
 # ==============================================================================
-# Illumina AVA PC Uninstaller - Ubuntu 22.04/24.04 LTS (v1.0)
+# Illumina AVA PC Uninstaller - Ubuntu 22.04/24.04/26.04 LTS (v1.1)
 # Safely removes Illumina, its shortcuts, firewall rules, and local HTTPS cert
 # (system CA store AND Chrome's per-user NSS database).
 # ==============================================================================
@@ -8,6 +8,7 @@ set -e
 
 INSTALL_DIR="/opt/illumina"
 MACHINE_DIR="/var/lib/illumina"
+WAYLAND_EXTENSION_UUID="illumina-window-manager@illumina.local"
 
 if [ "$EUID" -ne 0 ]; then
   echo "  Illumina uninstaller needs administrator (sudo) rights to remove program"
@@ -43,6 +44,20 @@ rm -f /home/avauser/Desktop/illumina*.desktop 2>/dev/null || true
 rm -f /home/avauser/.config/autostart/illumina*.desktop 2>/dev/null || true
 # The taskbar-pinned portal launcher lives in the system application menu
 rm -f /usr/share/applications/illumina-portal.desktop 2>/dev/null || true
+
+# Remove the native Wayland compositor helper for either installation mode.
+for U in "$INTERACTIVE_USER" avauser; do
+    id "$U" &>/dev/null || continue
+    U_HOME=$(eval echo "~$U")
+    EXTENSION_DIR="$U_HOME/.local/share/gnome-shell/extensions/$WAYLAND_EXTENSION_UUID"
+    [ -d "$EXTENSION_DIR" ] || continue
+    USER_UID=$(id -u "$U")
+    if [ -S "/run/user/$USER_UID/bus" ]; then
+        sudo -u "$U" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$USER_UID/bus" \
+            gnome-extensions disable "$WAYLAND_EXTENSION_UUID" > /dev/null 2>&1 || true
+    fi
+    rm -rf "$EXTENSION_DIR"
+done
 
 # 3. Remove Firewall rules
 echo -e "\n==> Removing firewall rules..."
