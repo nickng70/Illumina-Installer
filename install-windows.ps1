@@ -44,6 +44,10 @@ $PortalUrl   = "https://localhost"
 $TokenFile   = "$MachineDir\github-token"
 $SofficePath = "C:\Program Files\LibreOffice\program\soffice.exe"
 $FfmpegPath  = "C:\ffmpeg\ffmpeg.exe"
+$CftVersion  = "157.0.8103.38"
+$CftUrl      = "https://storage.googleapis.com/chrome-for-testing-public/$CftVersion/win64/chrome-win64.zip"
+$CftSha256   = "ae0deef27d449e1d7529df7705d609bab102de48464da13567ed3dd2ee1a0586"
+$BroadcastChromePath = "$InstallDir\browser\chrome.exe"
 # ----------------------------------------------------------------------------
 
 function Log($m) { Write-Host "`n==> $m" -ForegroundColor Green }
@@ -410,6 +414,30 @@ attrib +s +h "$InstallDir\Data" | Out-Null
 Log "Content folders prepared with this machine's recommended permissions."
 Set-Content "$MachineDir\current-version" $Release.tag_name
 
+# Program + Aux use Illumina's managed Chrome for Testing runtime. The pinned
+# hash prevents a corrupted download; explicit installer runs control upgrades.
+$currentCftVersion = if (Test-Path "$InstallDir\browser\version.txt") { Get-Content "$InstallDir\browser\version.txt" -Raw } else { "" }
+if ($currentCftVersion.Trim() -ne $CftVersion) {
+    Log "Installing the managed Broadcast browser ($CftVersion)..."
+    $cftStage = Join-Path $env:TEMP ("illumina-cft-" + [Guid]::NewGuid().ToString("N"))
+    try {
+        New-Item -ItemType Directory -Path $cftStage -Force | Out-Null
+        $cftZip = Join-Path $cftStage "browser.zip"
+        Invoke-WebRequest -Uri $CftUrl -OutFile $cftZip
+        $actualHash = (Get-FileHash $cftZip -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($actualHash -ne $CftSha256) { throw "Broadcast browser SHA-256 mismatch ($actualHash)." }
+        Expand-Archive -Path $cftZip -DestinationPath "$cftStage\unpacked" -Force
+        if (Test-Path "$InstallDir\browser") { Remove-Item "$InstallDir\browser" -Recurse -Force }
+        Move-Item "$cftStage\unpacked\chrome-win64" "$InstallDir\browser" -Force
+        Set-Content "$InstallDir\browser\version.txt" $CftVersion
+    } catch {
+        Write-Warning "  The managed Broadcast browser could not be downloaded/verified; normal Chrome will be used instead. $_"
+    } finally {
+        Remove-Item $cftStage -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+if (Test-Path $BroadcastChromePath) { Log "Broadcast browser ready at $BroadcastChromePath" }
+
 # ---------------- [7/9] Survey + certificate + machine config ---------------
 Log "[7/9] Site survey, HTTPS certificate, and machine settings..."
 Write-Host ""
@@ -553,6 +581,10 @@ $k = $obj.Kiosk
 $k | Add-Member -NotePropertyName "BaseUrl"          -NotePropertyValue $PortalUrl   -Force
 $k | Add-Member -NotePropertyName "Enabled"          -NotePropertyValue $true         -Force
 $k | Add-Member -NotePropertyName "RightWallEnabled" -NotePropertyValue $rightWallOn -Force
+$existingBroadcastPath = [string]$k.BroadcastChromePath
+if (($k.PSObject.Properties.Name -notcontains "BroadcastChromePath" -or [string]::IsNullOrWhiteSpace($existingBroadcastPath) -or $existingBroadcastPath.StartsWith("/")) -and (Test-Path $BroadcastChromePath)) {
+    $k | Add-Member -NotePropertyName "BroadcastChromePath" -NotePropertyValue $BroadcastChromePath -Force
+}
 # CgEnabled/ProgramEnabled/CgConfidenceMonitorEnabled are deliberately NOT
 # stamped: the compiled-in defaults (CG + encoder on, CG monitor off) cover
 # install day, Settings -> Displays owns them thereafter, and a re-install

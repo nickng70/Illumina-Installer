@@ -5,7 +5,7 @@ import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 
 const BUS_NAME = 'org.illumina.WindowManager';
 const OBJECT_PATH = '/org/illumina/WindowManager';
-const PROTOCOL_VERSION = 1;
+const PROTOCOL_VERSION = 5;
 
 const INTERFACE_XML = `
 <node>
@@ -27,6 +27,26 @@ const INTERFACE_XML = `
       <arg type="i" direction="in" name="width"/>
       <arg type="i" direction="in" name="height"/>
       <arg type="i" direction="in" name="tolerancePx"/>
+      <arg type="u" direction="out"/>
+    </method>
+    <method name="SetTaskbarHidden">
+      <arg type="s" direction="in" name="title"/>
+      <arg type="b" direction="in" name="prefixMatch"/>
+      <arg type="b" direction="in" name="hidden"/>
+      <arg type="u" direction="out"/>
+    </method>
+    <method name="WindowExists">
+      <arg type="s" direction="in" name="title"/>
+      <arg type="b" direction="in" name="prefixMatch"/>
+      <arg type="u" direction="out"/>
+    </method>
+    <method name="SetFullscreen">
+      <arg type="s" direction="in" name="title"/>
+      <arg type="b" direction="in" name="prefixMatch"/>
+      <arg type="i" direction="in" name="x"/>
+      <arg type="i" direction="in" name="y"/>
+      <arg type="i" direction="in" name="width"/>
+      <arg type="i" direction="in" name="height"/>
       <arg type="u" direction="out"/>
     </method>
   </interface>
@@ -106,6 +126,22 @@ export default class IlluminaWindowManagerExtension extends Extension {
 
             if (window.is_fullscreen()) {
                 const monitor = this._monitorForRect(x, y, width, height);
+                if (monitor < 0 && title === 'Illumina — CG') {
+                    // No dedicated CG output: park behind the Left Wall on
+                    // the first non-primary output, never minimized. Fall
+                    // back to the primary only on a single-monitor PC.
+                    const primary = global.display.get_primary_monitor();
+                    let parkingMonitor = primary;
+                    for (let index = 0; index < global.display.get_n_monitors(); index++) {
+                        if (index !== primary) {
+                            parkingMonitor = index;
+                            break;
+                        }
+                    }
+                    window.move_to_monitor(parkingMonitor);
+                    window.lower();
+                    return 0;
+                }
                 if (monitor < 0) {
                     this._lastError = `No monitor contains target ${x},${y} ${width}x${height}`;
                     return 2;
@@ -135,17 +171,85 @@ export default class IlluminaWindowManagerExtension extends Extension {
         }
     }
 
+    WindowExists(title, prefixMatch) {
+        this._lastError = '';
+        if (!this._validTitle(title)) {
+            this._lastError = `Invalid title: ${title}`;
+            return 2;
+        }
+        try {
+            return this._findWindow(title, prefixMatch) ? 0 : 1;
+        } catch (error) {
+            this._lastError = `${error.message}\n${error.stack || ''}`;
+            return 2;
+        }
+    }
+
+    SetFullscreen(title, prefixMatch, x, y, width, height) {
+        this._lastError = '';
+        if (!this._validRequest(title, x, y, width, height, 0)) {
+            this._lastError = `Invalid fullscreen request: ${title}`;
+            return 2;
+        }
+        try {
+            const window = this._findWindow(title, prefixMatch);
+            if (!window)
+                return 1;
+            const monitor = this._monitorForRect(x, y, width, height);
+            if (monitor < 0) {
+                this._lastError = `No monitor contains target ${x},${y} ${width}x${height}`;
+                return 2;
+            }
+            if (window.minimized)
+                window.unminimize();
+            window.move_to_monitor(monitor);
+            if (!window.is_fullscreen())
+                window.make_fullscreen();
+            return 0;
+        } catch (error) {
+            this._lastError = `${error.message}\n${error.stack || ''}`;
+            logError(error, 'Illumina SetFullscreen');
+            return 2;
+        }
+    }
+
+    SetTaskbarHidden(title, prefixMatch, hidden) {
+        this._lastError = '';
+        if (!this._validTitle(title)) {
+            this._lastError = `Invalid title: ${title}`;
+            return 2;
+        }
+
+        try {
+            const window = this._findWindow(title, prefixMatch);
+            if (!window)
+                return 1;
+            if (typeof window.set_skip_taskbar === 'function')
+                window.set_skip_taskbar(hidden);
+            else
+                window.skip_taskbar = hidden;
+            return 0;
+        } catch (error) {
+            this._lastError = `${error.message}\n${error.stack || ''}`;
+            logError(error, 'Illumina SetTaskbarHidden');
+            return 2;
+        }
+    }
+
     _validRequest(title, x, y, width, height, tolerancePx) {
-        const allowedTitle = title === 'Illumina'
-            || title === 'Illumina - '
-            || title.startsWith('Illumina — ');
-        return allowedTitle
-            && title.length <= 256
+        return this._validTitle(title)
             && Math.abs(x) <= 32768
             && Math.abs(y) <= 32768
             && width > 0 && width <= 16384
             && height > 0 && height <= 16384
             && tolerancePx >= -1 && tolerancePx <= 1024;
+    }
+
+    _validTitle(title) {
+        return (title === 'Illumina'
+            || title === 'Illumina - '
+            || title.startsWith('Illumina — '))
+            && title.length <= 256;
     }
 
     _findWindow(title, prefixMatch) {

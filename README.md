@@ -28,7 +28,7 @@ Illumina is the central hub of your live production environment, coordinating di
 * **Left & Right Displays:** The congregation-facing main outputs. LED video walls, laser projectors, and large-format LCD panels are all first-class citizens.
 * **CG Overlay:** A dedicated lower-third/chyron output, typically routed into a broadcast switcher or OBS via capture card. Optional — switch it on in **Menu → Settings → Displays** whenever your streaming hardware arrives.
 * **Confidence Monitors:** Smaller windowed previews near the operator or pulpit for lyrics, slides, and stream health.
-* **Aux Hall Display:** An overflow-room program player with independent audio routing for cry rooms, foyers, or secondary halls (part of a broadcast setup).
+* **Aux Hall Display:** Full-resolution, low-latency Program video and audio for cry rooms, foyers, or secondary halls. NDI and ordinary cameras share the same pre-encode path; no second camera opening or monitor encode is needed. The installer supplies a version-pinned, SHA-256-verified Chrome for Testing runtime for the Broadcast Encoder/Aux profile so no shared-tab bar appears; normal Chrome remains the fallback and other kiosk windows are unchanged.
 
 ### Smart Control & Video Processing
 * **Novastar Video Controllers:** Day/evening brightness schedules and LED cabinet health, straight from the portal — no more climbing into the rack.
@@ -36,6 +36,7 @@ Illumina is the central hub of your live production environment, coordinating di
 
 ### Cameras & PTZ
 * **Supported protocols:** VISCA, Pelco-D, and Pelco-P, over UDP (VISCA-over-IP) or serial (RS-232/RS-485).
+* **NDI video sources:** In Broadcast's scene editor, choose **New Source → NDI Source → Detect**, or enter the exact source name/IP manually. Physical cameras have their own Detect picker. The official NDI runtime is bundled on Windows and Ubuntu—no NDI Tools installation or separate driver is required. Ubuntu setup includes Avahi for NDI discovery, PulseAudio/PipeWire audio enumeration, and V4L2 camera labels.
 * **Placement:** keep PTZ cameras on the same local subnet as the AVA PC for low-latency preset recall and live tally.
 
 ### Network Requirements
@@ -106,7 +107,7 @@ sudo apt-get update && sudo apt-get install -y curl && curl -sSL https://raw.git
 ### Step 4: Restart Once, Then You're Live
 Illumina is installed and running immediately. On Ubuntu 26.04 (or an earlier Ubuntu running GNOME/Wayland), accept the installer's restart prompt before opening the portal: GNOME Shell must load Illumina's native window-management helper once so every kiosk window can land on its assigned monitor. Earlier X11 installations only need the optional Auto Sign-In restart. When upgrading from the earlier unsupported Wayland attempt, the installer also clears stale pseudo-screen window geometry once and keeps a backup beside the settings file; all display enable flags and unrelated settings are preserved.
 
-New Ubuntu installations start with **CG and Broadcast Encoder disabled**; enable them later in **Menu → Settings → Displays** when your streaming hardware is ready. The Right Display still follows your installer survey answer. On the dedicated auto-login AVA account, the portal uses Chrome's basic password store because GNOME cannot unlock its login keyring without a password prompt—do not save unrelated website passwords in that Chrome profile. Ubuntu uninstall/reinstall preserves support logs under `/var/lib/illumina/support-logs`; the app continues its normal 14-day retention.
+New Ubuntu installations start with **CG and Broadcast Encoder disabled**; enable them later in **Menu → Settings → Displays** when your streaming hardware is ready. The Right Display still follows your installer survey answer. On the dedicated auto-login AVA account, the portal has an isolated Chrome profile and all Illumina Chrome profiles use Chrome's basic password store because GNOME cannot unlock its login keyring without a password prompt—do not save unrelated website passwords in those profiles.
 
 > *Re-running the installer later (e.g. for a manual update)? Sign in as your administrator account first (e.g. `avaadmin`) — the dedicated `avauser` account intentionally has no sudo rights, so the installer's `sudo` steps will politely refuse.*
 

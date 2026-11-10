@@ -94,12 +94,6 @@ systemctl unmask sleep.target suspend.target hibernate.target hybrid-sleep.targe
 
 # 7. Remove Files
 echo -e "\n==> Removing application files..."
-# Keep support history outside the app directory so a later reinstall can
-# restore it. The app still applies its normal 14-day retention at startup.
-if [ -d "$INSTALL_DIR/AppData/logs" ]; then
-    mkdir -p "$MACHINE_DIR/support-logs"
-    cp -a "$INSTALL_DIR/AppData/logs/." "$MACHINE_DIR/support-logs/"
-fi
 rm -rf "$INSTALL_DIR"
 
 read -p "  Keep machine settings (GitHub token, Google Drive keys, display overrides) for future installs? [Y/n] (ENTER = Yes): " KEEP_MACHINE

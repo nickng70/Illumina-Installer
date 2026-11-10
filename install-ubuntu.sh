@@ -62,6 +62,10 @@ INSTALL_DIR="/opt/illumina"
 MACHINE_DIR="/var/lib/illumina"
 PORTAL_URL="https://localhost"
 WAYLAND_EXTENSION_UUID="illumina-window-manager@illumina.local"
+CFT_VERSION="157.0.8103.38"
+CFT_URL="https://storage.googleapis.com/chrome-for-testing-public/$CFT_VERSION/linux64/chrome-linux64.zip"
+CFT_SHA256="8cdeb344e9b2cefe59f4aea8d1d93d5d93054c03cde217665c16fc1f62e72a66"
+BROADCAST_CHROME_PATH="$INSTALL_DIR/browser/chrome"
 
 # Ubuntu 26.04's GNOME sessions are Wayland-only. Earlier releases use the
 # existing X11 backend unless the installer itself is running in Wayland.
@@ -119,11 +123,14 @@ apt-get update -qq > /dev/null
 # setcap, which lets the unprivileged kiosk account bind ports 80/443.
 # x11-utils (xprop) and x11-xserver-utils (xrandr) feed the X11 backend.
 # libglib2.0-bin supplies gdbus for the native GNOME/Wayland backend.
-apt-get install -y -qq curl unzip jq openssl wmctrl zenity libnss3-tools libcap2-bin x11-utils x11-xserver-utils libglib2.0-bin > /dev/null
+# pulseaudio-utils supplies pactl for audio discovery, v4l-utils identifies
+# physical cameras, and Avahi provides NDI's multicast source discovery.
+apt-get install -y -qq curl unzip jq openssl wmctrl zenity libnss3-tools libcap2-bin x11-utils x11-xserver-utils libglib2.0-bin pulseaudio-utils v4l-utils avahi-daemon libavahi-client3 > /dev/null
+systemctl enable --now avahi-daemon > /dev/null 2>&1 || true
 # curl is NOT preinstalled on a fresh Ubuntu - and neither are some of the
 # others on minimal installs. Verify the essentials actually landed rather
 # than failing mysteriously three steps later.
-for TOOL in curl unzip jq openssl gdbus; do
+for TOOL in curl unzip jq openssl gdbus pactl v4l2-ctl; do
     if ! command -v "$TOOL" > /dev/null 2>&1; then
         echo "  ERROR: the '$TOOL' tool could not be installed. Please check this PC's"
         echo "  internet connection, run 'sudo apt update', then re-run this installer."
@@ -374,6 +381,30 @@ chmod 500 "$INSTALL_DIR/Data"
 echo "  Content folders prepared with native Linux permissions (locked to $HUMAN_USER)."
 echo "$TAG_NAME" > "$MACHINE_DIR/current-version"
 
+# Program + Aux use Illumina's managed Chrome for Testing runtime. Pin the
+# version and hash so capture behavior is reproducible, and refresh it only
+# through an explicit installer run rather than an unexpected browser update.
+if [ ! -f "$INSTALL_DIR/browser/version.txt" ] || [ "$(cat "$INSTALL_DIR/browser/version.txt" 2>/dev/null)" != "$CFT_VERSION" ]; then
+    echo "  Installing the managed Broadcast browser ($CFT_VERSION)..."
+    CFT_STAGE=$(mktemp -d)
+    if curl -fSL "$CFT_URL" -o "$CFT_STAGE/browser.zip" \
+        && echo "$CFT_SHA256  $CFT_STAGE/browser.zip" | sha256sum -c - \
+        && unzip -q "$CFT_STAGE/browser.zip" -d "$CFT_STAGE/unpacked"; then
+        rm -rf "$INSTALL_DIR/browser"
+        mkdir -p "$INSTALL_DIR/browser"
+        cp -a "$CFT_STAGE/unpacked/chrome-linux64/." "$INSTALL_DIR/browser/"
+        chmod -R a+rX "$INSTALL_DIR/browser"
+        chmod +x "$INSTALL_DIR/browser/chrome"
+        echo "$CFT_VERSION" > "$INSTALL_DIR/browser/version.txt"
+    else
+        echo "  WARNING: the managed Broadcast browser could not be downloaded/verified; normal Chrome will be used instead."
+    fi
+    rm -rf "$CFT_STAGE"
+fi
+if [ -x "$BROADCAST_CHROME_PATH" ]; then
+    echo "  Broadcast browser ready at $BROADCAST_CHROME_PATH"
+fi
+
 # Let the unprivileged kiosk account bind ports 80/443 (production config).
 # No-op where the kernel already allows unprivileged binding; essential on
 # older LTS kernels. Re-applied by the updater after every binary swap.
@@ -500,11 +531,6 @@ echo "  Certificate created, trusted system-wide and in Chrome, and ready for Ke
 # (Detection code removed - virtual adapters like docker0 can never win now.)
 
 mkdir -p "$INSTALL_DIR/AppData"
-if [ -d "$MACHINE_DIR/support-logs" ]; then
-    mkdir -p "$INSTALL_DIR/AppData/logs"
-    cp -an "$MACHINE_DIR/support-logs/." "$INSTALL_DIR/AppData/logs/"
-    chown -R "$HUMAN_USER:$HUMAN_USER" "$INSTALL_DIR/AppData/logs"
-fi
 [ -f "$OVERRIDES" ] || echo '{}' > "$OVERRIDES"
 
 # The pre-native Wayland build could persist XWayland pseudo-screen geometry.
@@ -523,18 +549,24 @@ if [ "$NATIVE_GNOME_WAYLAND" = true ] && [ ! -f "$WAYLAND_GEOMETRY_MARKER" ]; th
     echo "  Cleared legacy Wayland window geometry (backup: AppData/AppSettingsOverrides.pre-wayland-v1.json)."
 fi
 
+CFT_CONFIGURED_PATH="$BROADCAST_CHROME_PATH"
+[ -x "$BROADCAST_CHROME_PATH" ] || CFT_CONFIGURED_PATH=""
 jq \
   --argjson right "$RIGHT_ON" --argjson sync "$SYNC_ON" \
   --arg plang "$PRIMARY_LANG" --arg slang "$SECONDARY_LANG" \
   --arg key "$KEY_JSON" --arg prayer "$PRAYER_ID" --arg ann "$ANN_ID" \
   --arg soffice "/usr/bin/soffice" --arg ffmpeg "/usr/bin/ffmpeg" \
-  --arg pfx "$PFX_PATH" --arg pfxpass "$PFX_PASS" \
+  --arg pfx "$PFX_PATH" --arg pfxpass "$PFX_PASS" --arg cft "$CFT_CONFIGURED_PATH" \
   '
     .Urls = "https://localhost;http://0.0.0.0:80"
     | .Kestrel = { Certificates: { Default: { Path: $pfx, Password: $pfxpass } } }
     | .Kiosk = ((.Kiosk // {}) + { BaseUrl: "https://localhost", Enabled: true,
                                    RightWallEnabled: $right,
-                                   CgEnabled: false, ProgramEnabled: false })
+                                   CgEnabled: (.Kiosk.CgEnabled // false),
+                                   ProgramEnabled: (.Kiosk.ProgramEnabled // false) })
+    | .Kiosk.BroadcastChromePath = (if (.Kiosk.BroadcastChromePath // "") == ""
+                                      or ((.Kiosk.BroadcastChromePath // "") | test("^[A-Za-z]:[\\\\/]"))
+                                    then $cft else .Kiosk.BroadcastChromePath end)
     | .Localization = ((.Localization // {}) + { PrimaryLanguage: $plang, SelectedSecondaryLanguage: $slang })
     | .SlideLibrary = ((.SlideLibrary // {}) + {
         LibreOfficePath: $soffice,
@@ -692,7 +724,7 @@ rm -f "$DESKTOP_DIR"/illumina*.desktop "$DESKTOP_DIR"/restart*.desktop "$AUTOSTA
 # Do not save unrelated website passwords in the AVA PC's Chrome profile.
 PORTAL_CHROME_FLAGS=""
 if [ "$USE_AVA_USER" = true ] && [ "$AUTO_LOGIN_ON" = true ]; then
-    PORTAL_CHROME_FLAGS="--password-store=basic"
+    PORTAL_CHROME_FLAGS="--user-data-dir=$HUMAN_HOME/.config/illumina-portal --password-store=basic --no-first-run --no-default-browser-check"
 fi
 cat <<EOF > /usr/share/applications/illumina-portal.desktop
 [Desktop Entry]
